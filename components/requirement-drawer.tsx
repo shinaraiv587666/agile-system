@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -31,7 +32,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
-import { History, ChevronRight, Pencil, X, Plus, Trash2, Save, Columns3 } from "lucide-react"
+import { History, ChevronRight, Pencil, X, Plus, Trash2, Save, Columns3, ClipboardPaste, Check } from "lucide-react"
 import { TestCase } from "@/components/test-execution-dialog"
 import { IterationRecord } from "@/components/iteration-history-dialog"
 
@@ -266,6 +267,111 @@ function emptyTableData(): MatrixTableData {
   return { columns: [], rows: [] }
 }
 
+function createTableColumnId(): string {
+  return `col_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`
+}
+
+function createTableRowId(): string {
+  return `row_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`
+}
+
+function normalizeTags(tags: string[]): string[] {
+  const next = Array.from(
+    new Set(
+      tags
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  )
+  return next.length > 0 ? next : ["all"]
+}
+
+function inferColumnTagsFromHeader(header: string): string[] {
+  const m = header.match(/(?:^|[^\d])(\d{2})(?!\d)/)
+  return m?.[1] ? [m[1]] : ["all"]
+}
+
+function parseClipboardTextToTableData(raw: string): MatrixTableData | null {
+  const lines = raw
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+  if (lines.length === 0) return null
+
+  const matrix = lines.map((line) => line.split("\t"))
+  const width = Math.max(...matrix.map((r) => r.length))
+  const headerCells = matrix[0] ?? []
+
+  const columns: DynamicColumn[] = Array.from({ length: width }, (_, index) => {
+    const rawHeader = (headerCells[index] ?? "").trim()
+    const title = rawHeader || `列${index + 1}`
+    return {
+      id: createTableColumnId(),
+      title,
+      tags: inferColumnTagsFromHeader(title),
+    }
+  })
+
+  const rows: DynamicRow[] = matrix.slice(1).map((cells) => {
+    const row: DynamicRow = { id: createTableRowId() }
+    columns.forEach((col, index) => {
+      row[col.id] = cells[index] ?? ""
+    })
+    return row
+  })
+  return { columns, rows }
+}
+
+function mergeTableDataForImport(existing: MatrixTableData, incoming: MatrixTableData, append: boolean): MatrixTableData {
+  if (!append) return incoming
+
+  const mergedColumns: DynamicColumn[] = existing.columns.map((col) => ({ ...col, tags: normalizeTags(col.tags) }))
+  const titleToId = new Map<string, string>(mergedColumns.map((col) => [col.title.trim(), col.id]))
+  const incomingToTargetId = new Map<string, string>()
+
+  for (const col of incoming.columns) {
+    const key = col.title.trim()
+    const matchedId = titleToId.get(key)
+    if (matchedId) {
+      incomingToTargetId.set(col.id, matchedId)
+      continue
+    }
+    const nextCol: DynamicColumn = {
+      id: createTableColumnId(),
+      title: col.title,
+      tags: normalizeTags(col.tags),
+    }
+    mergedColumns.push(nextCol)
+    titleToId.set(nextCol.title.trim(), nextCol.id)
+    incomingToTargetId.set(col.id, nextCol.id)
+  }
+
+  const normalizeRow = (row: DynamicRow): DynamicRow => {
+    const next: DynamicRow = { id: row.id }
+    for (const col of mergedColumns) {
+      next[col.id] = row[col.id] ?? ""
+    }
+    return next
+  }
+
+  const existingRows = existing.rows.map(normalizeRow)
+  const incomingRows = incoming.rows.map((row) => {
+    const next: DynamicRow = { id: createTableRowId() }
+    for (const col of mergedColumns) {
+      next[col.id] = ""
+    }
+    for (const sourceCol of incoming.columns) {
+      const targetId = incomingToTargetId.get(sourceCol.id)
+      if (!targetId) continue
+      next[targetId] = row[sourceCol.id] ?? ""
+    }
+    return next
+  })
+
+  return { columns: mergedColumns, rows: [...existingRows, ...incomingRows] }
+}
+
 function buildNewDraft(defaults: NewRequirementDefaults, draftId: string): RequirementDetail {
   return {
     id: draftId,
@@ -305,6 +411,11 @@ export function RequirementDrawer({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [newColumnTitle, setNewColumnTitle] = useState("")
   const [newColumnTags, setNewColumnTags] = useState("all")
+  const [showClipboardImport, setShowClipboardImport] = useState(false)
+  const [clipboardText, setClipboardText] = useState("")
+  const [appendImportedRows, setAppendImportedRows] = useState(false)
+  const [editingTagColumnId, setEditingTagColumnId] = useState<string | null>(null)
+  const [editingTagValue, setEditingTagValue] = useState("")
 
   const resetFormState = () => {
     setIsEditing(false)
@@ -317,6 +428,11 @@ export function RequirementDrawer({
     setDeleteDialogOpen(false)
     setNewColumnTitle("")
     setNewColumnTags("all")
+    setShowClipboardImport(false)
+    setClipboardText("")
+    setAppendImportedRows(false)
+    setEditingTagColumnId(null)
+    setEditingTagValue("")
   }
 
   const newDraftSessionIdRef = useRef<string>("")
@@ -466,7 +582,7 @@ export function RequirementDrawer({
 
   const handleAddTableRow = () => {
     setEditTableData((prev) => {
-      const rowId = `row_${Date.now()}`
+      const rowId = createTableRowId()
       const base: DynamicRow = { id: rowId }
       for (const col of prev.columns) {
         base[col.id] = ""
@@ -482,12 +598,12 @@ export function RequirementDrawer({
   const handleAddTableColumn = () => {
     const title = newColumnTitle.trim()
     if (!title) return
-    const id = `col_${Date.now()}`
+    const id = createTableColumnId()
     const tags = newColumnTags
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean)
-    const normalizedTags = tags.length > 0 ? tags : ["all"]
+    const normalizedTags = normalizeTags(tags)
 
     setEditTableData((prev) => ({
       columns: [...prev.columns, { id, title, tags: normalizedTags }],
@@ -506,6 +622,41 @@ export function RequirementDrawer({
         return next
       }),
     }))
+  }
+
+  const handleColumnTitleChange = (columnId: string, title: string) => {
+    setEditTableData((prev) => ({
+      ...prev,
+      columns: prev.columns.map((col) => (col.id === columnId ? { ...col, title } : col)),
+    }))
+  }
+
+  const startEditColumnTags = (column: DynamicColumn) => {
+    setEditingTagColumnId(column.id)
+    setEditingTagValue(column.tags.join(", "))
+  }
+
+  const commitEditColumnTags = (columnId: string) => {
+    const tags = normalizeTags(editingTagValue.split(","))
+    setEditTableData((prev) => ({
+      ...prev,
+      columns: prev.columns.map((col) => (col.id === columnId ? { ...col, tags } : col)),
+    }))
+    setEditingTagColumnId(null)
+    setEditingTagValue("")
+  }
+
+  const cancelEditColumnTags = () => {
+    setEditingTagColumnId(null)
+    setEditingTagValue("")
+  }
+
+  const handleClipboardImport = () => {
+    const parsed = parseClipboardTextToTableData(clipboardText)
+    if (!parsed) return
+    setEditTableData((prev) => mergeTableDataForImport(prev, parsed, appendImportedRows))
+    setClipboardText("")
+    setShowClipboardImport(false)
   }
 
   const handleSave = () => {
@@ -785,7 +936,7 @@ export function RequirementDrawer({
 
             {isEditing && (
               <div className="mb-3 p-3 border border-slate-200 rounded-lg bg-slate-50/60">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <Input
                     value={newColumnTitle}
                     onChange={(e) => setNewColumnTitle(e.target.value)}
@@ -798,56 +949,183 @@ export function RequirementDrawer({
                     placeholder="标签：fr07,all"
                     className="h-8 text-xs bg-white"
                   />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
                   <Button size="sm" onClick={handleAddTableColumn} className="h-8 text-xs gap-1.5">
                     <Plus className="w-3 h-3" />
                     添加列
                   </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setShowClipboardImport((prev) => !prev)}
+                    className="h-8 text-xs gap-1.5 bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100"
+                  >
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    从 Excel 粘贴
+                  </Button>
                 </div>
+                {showClipboardImport && (
+                  <div className="mt-3 rounded-md border border-sky-200 bg-white p-3 space-y-2">
+                    <p className="text-xs text-slate-600">
+                      请直接从 Excel 或飞书表格中复制数据并粘贴于此。系统会自动将第一行作为表头（列名）。
+                    </p>
+                    <Textarea
+                      value={clipboardText}
+                      onChange={(e) => setClipboardText(e.target.value)}
+                      rows={8}
+                      placeholder={"示例：\n07广告位\t状态\t负责人\n首页Banner\t进行中\t小王"}
+                      className="text-xs bg-white border-slate-200"
+                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+                        <Checkbox
+                          checked={appendImportedRows}
+                          onCheckedChange={(checked) => setAppendImportedRows(Boolean(checked))}
+                        />
+                        追加到现有数据末尾（不勾选则覆盖当前表格）
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() => {
+                            setShowClipboardImport(false)
+                            setClipboardText("")
+                          }}
+                        >
+                          取消
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={handleClipboardImport}
+                          disabled={!clipboardText.trim()}
+                        >
+                          确认导入
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
             <div className="rounded-lg border border-slate-200 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-xs min-w-[720px]">
+                <table className="w-full text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      {visibleColumns.map((col) => (
-                        <th key={col.id} className="px-3 py-2 text-left font-medium text-slate-600">
-                          <div className="flex items-center justify-between gap-2">
-                            <span>{col.title}</span>
-                            {isEditing && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-5 w-5 text-slate-400 hover:text-rose-500"
-                                onClick={() => handleDeleteTableColumn(col.id)}
-                              >
-                                <X className="w-3 h-3" />
-                              </Button>
+                      {visibleColumns.map((col, colIndex) => {
+                        const minWidthClass =
+                          col.title.trim().length <= 6 ? "min-w-[120px]" : "min-w-[150px]"
+                        return (
+                        <th
+                          key={col.id}
+                          className={cn(
+                            "px-3 py-2 text-left font-medium text-slate-600 whitespace-normal break-words align-top",
+                            minWidthClass,
+                            colIndex === 0 &&
+                              "sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"
+                          )}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-start justify-between gap-1">
+                              {isEditing ? (
+                                <Input
+                                  value={col.title}
+                                  onChange={(e) => handleColumnTitleChange(col.id, e.target.value)}
+                                  className="w-full min-w-[120px] h-7 text-xs px-2 bg-white border-slate-200"
+                                />
+                              ) : (
+                                <span className="pt-1">{col.title}</span>
+                              )}
+                              {isEditing && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-4 w-4 text-slate-300 hover:text-rose-400"
+                                  onClick={() => handleDeleteTableColumn(col.id)}
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </Button>
+                              )}
+                            </div>
+                            {isEditing ? (
+                              editingTagColumnId === col.id ? (
+                                <div className="flex items-center gap-1">
+                                  <Input
+                                    value={editingTagValue}
+                                    onChange={(e) => setEditingTagValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault()
+                                        commitEditColumnTags(col.id)
+                                      } else if (e.key === "Escape") {
+                                        e.preventDefault()
+                                        cancelEditColumnTags()
+                                      }
+                                    }}
+                                    className="w-full min-w-[120px] h-6 text-[10px] px-2 bg-white border-slate-200"
+                                    placeholder="逗号分隔标签"
+                                    autoFocus
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-5 w-5 text-emerald-500 hover:text-emerald-600"
+                                    onClick={() => commitEditColumnTags(col.id)}
+                                  >
+                                    <Check className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center rounded-full border border-slate-200 px-2 py-0.5 text-[10px] text-slate-500 bg-white hover:bg-slate-50"
+                                  onClick={() => startEditColumnTags(col)}
+                                >
+                                  {col.tags.join(", ")}
+                                </button>
+                              )
+                            ) : (
+                              <div className="text-[10px] text-slate-400 mt-1">{col.tags.join(", ")}</div>
                             )}
                           </div>
-                          <div className="text-[10px] text-slate-400 mt-1">{col.tags.join(", ")}</div>
                         </th>
-                      ))}
+                      )})}
                       {isEditing && <th className="px-2 py-2 w-8" />}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {tableDataForRender.rows.map((row, rowIndex) => (
                       <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
-                        {visibleColumns.map((col) => (
-                          <td key={`${row.id}-${col.id}`} className="px-2 py-1.5">
+                        {visibleColumns.map((col, colIndex) => {
+                          const cellValue = String(row[col.id] ?? "")
+                          const minWidthClass = cellValue.trim().length <= 10 ? "min-w-[120px]" : "min-w-[150px]"
+                          return (
+                          <td
+                            key={`${row.id}-${col.id}`}
+                            className={cn(
+                              "px-2 py-1.5 whitespace-normal break-words",
+                              minWidthClass,
+                              colIndex === 0 && "sticky left-0 bg-white z-10"
+                            )}
+                          >
                             {isEditing ? (
                               <Input
                                 value={row[col.id] ?? ""}
                                 onChange={(e) => handleTableCellEdit(rowIndex, col.id, e.target.value)}
-                                className="h-8 text-xs px-2 bg-white"
+                                className="w-full min-w-[120px] h-8 text-xs px-2 bg-white"
                               />
                             ) : (
                               <span className="text-slate-700">{row[col.id] ?? "-"}</span>
                             )}
                           </td>
-                        ))}
+                        )})}
                         {isEditing && (
                           <td className="px-1 py-1">
                             <Button
