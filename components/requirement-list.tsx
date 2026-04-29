@@ -73,6 +73,14 @@ export function RequirementList({
     onVisibleCountChange?.(visibleRequirements.length)
   }, [onVisibleCountChange, visibleRequirements.length])
 
+  const handleDrawerOpenChange = useCallback((next: boolean) => {
+    setDrawerOpen(next)
+    if (!next) {
+      setSelectedRequirement(null)
+      setIsNewRequirement(false)
+    }
+  }, [])
+
   const handleCardClick = useCallback((requirement: RequirementDetail) => {
     setTestDialogOpen(false)
     setIterationSheetOpen(false)
@@ -131,12 +139,11 @@ export function RequirementList({
           requirements.map(r => r.id === updatedRequirement.id ? updatedRequirement : r)
         )
       }
-      setDrawerOpen(false)
-      setIsNewRequirement(false)
+      handleDrawerOpenChange(false)
     } catch (error) {
       console.error("Failed to save requirement:", error instanceof Error ? error.message : String(error))
     }
-  }, [isNewRequirement, requirements, onRequirementsChange])
+  }, [isNewRequirement, requirements, onRequirementsChange, handleDrawerOpenChange])
 
   const handleDeleteRequirement = useCallback(async (requirementId: string) => {
     try {
@@ -153,23 +160,10 @@ export function RequirementList({
   const handleCreateNew = useCallback(() => {
     setTestDialogOpen(false)
     setIterationSheetOpen(false)
-    const newRequirement: RequirementDetail = {
-      id: `tmp-req-${Date.now()}`,
-      projectId: projectId || "default",
-      category: activeCategory === "all" ? (projectCategories[0] || "core") : activeCategory,
-      title: "",
-      version: "",
-      status: "todo",
-      iterations: 1,
-      description: "",
-      testCases: [],
-      iterationHistory: [],
-      tableData: { columns: [], rows: [] },
-    }
-    setSelectedRequirement(newRequirement)
+    setSelectedRequirement(null)
     setIsNewRequirement(true)
     setDrawerOpen(true)
-  }, [activeCategory, projectCategories, projectId])
+  }, [])
 
   const lastCreateReq = useRef(0)
   useEffect(() => {
@@ -282,7 +276,11 @@ export function RequirementList({
         requirement={selectedRequirement}
         open={drawerOpen}
         availableCategories={projectCategories.length > 0 ? projectCategories : ["core"]}
-        onOpenChange={setDrawerOpen}
+        newRequirementDefaults={{
+          projectId: projectId || "default",
+          category: activeCategory === "all" ? (projectCategories[0] || "core") : activeCategory,
+        }}
+        onOpenChange={handleDrawerOpenChange}
         onSave={handleSaveRequirement}
         onDelete={handleDeleteRequirement}
         isNewRequirement={isNewRequirement}

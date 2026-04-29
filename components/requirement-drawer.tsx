@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import {
   Sheet,
   SheetContent,
@@ -66,25 +66,56 @@ export interface RequirementDetail {
   tableData?: MatrixTableData
 }
 
+export interface NewRequirementDefaults {
+  projectId: string
+  category: string
+}
+
 interface RequirementDrawerProps {
   requirement: RequirementDetail | null
   open: boolean
   availableCategories: string[]
+  /** 新建模式且 requirement 为 null 时用于生成草稿（projectId / 默认分类） */
+  newRequirementDefaults?: NewRequirementDefaults | null
   onOpenChange: (open: boolean) => void
   onSave?: (requirement: RequirementDetail) => void
   onDelete?: (requirementId: string) => void
   isNewRequirement?: boolean
 }
 
+function emptyTableData(): MatrixTableData {
+  return { columns: [], rows: [] }
+}
+
+function buildNewDraft(defaults: NewRequirementDefaults, draftId: string): RequirementDetail {
+  return {
+    id: draftId,
+    projectId: defaults.projectId,
+    category: defaults.category,
+    title: "",
+    version: "",
+    status: "todo",
+    iterations: 1,
+    description: "",
+    testCases: [],
+    iterationHistory: [],
+    tableData: emptyTableData(),
+  }
+}
+
 export function RequirementDrawer({
   requirement,
   open,
   availableCategories,
+  newRequirementDefaults = null,
   onOpenChange,
   onSave,
   onDelete,
   isNewRequirement = false,
 }: RequirementDrawerProps) {
+  const availableCategoriesRef = useRef(availableCategories)
+  availableCategoriesRef.current = availableCategories
+
   const [isEditing, setIsEditing] = useState(false)
   const [editTitle, setEditTitle] = useState("")
   const [editVersion, setEditVersion] = useState("")
@@ -103,44 +134,79 @@ export function RequirementDrawer({
     setEditDescription("")
     setEditCategory("")
     setTableFilter("all")
-    setEditTableData({ columns: [], rows: [] })
+    setEditTableData(emptyTableData())
     setDeleteDialogOpen(false)
     setNewColumnTitle("")
     setNewColumnTags("all")
   }
 
-  // Initialize state when requirement changes
-  useEffect(() => {
-    if (requirement) {
-      setEditTitle(requirement.title)
-      setEditVersion(requirement.version ?? "")
-      setEditDescription(requirement.description)
-      setEditCategory(requirement.category || availableCategories[0] || "core")
-      if (requirement.tableData) {
-        setEditTableData({
-          columns: requirement.tableData.columns.map((c) => ({ ...c })),
-          rows: requirement.tableData.rows.map((r) => ({ ...r })),
-        })
-      } else {
-        setEditTableData({ columns: [], rows: [] })
-      }
-      // Auto enter edit mode for new requirements
-      if (isNewRequirement) {
-        setIsEditing(true)
-      }
-    }
-  }, [requirement, isNewRequirement, availableCategories])
+  const newDraftSessionIdRef = useRef<string>("")
 
-  // Reset edit mode when drawer closes
   useEffect(() => {
     if (!open) {
-      resetFormState()
+      newDraftSessionIdRef.current = ""
     }
   }, [open])
 
+  const effectiveRequirement: RequirementDetail | null = useMemo(() => {
+    if (requirement) return requirement
+    if (open && isNewRequirement && newRequirementDefaults) {
+      if (!newDraftSessionIdRef.current) {
+        newDraftSessionIdRef.current = `tmp-req-${Date.now()}`
+      }
+      return buildNewDraft(newRequirementDefaults, newDraftSessionIdRef.current)
+    }
+    return null
+  }, [requirement, open, isNewRequirement, newRequirementDefaults])
+
+  const hydrateFieldsFromRequirement = useCallback((req: RequirementDetail) => {
+    const cats = availableCategoriesRef.current
+    setEditTitle(req.title)
+    setEditVersion(req.version ?? "")
+    setEditDescription(req.description)
+    setEditCategory(req.category || cats[0] || "core")
+    if (req.tableData) {
+      setEditTableData({
+        columns: req.tableData.columns.map((c) => ({ ...c })),
+        rows: req.tableData.rows.map((r) => ({ ...r })),
+      })
+    } else {
+      setEditTableData(emptyTableData())
+    }
+    setTableFilter("all")
+  }, [])
+
+  const latestEffectiveRef = useRef<RequirementDetail | null>(null)
+  latestEffectiveRef.current = effectiveRequirement
+
+  /** 仅在打开、切换需求 id、或新建/浏览模式切换时回填，避免 Radix open 抖动或父级对象引用变化导致编辑态被清空 */
+  useEffect(() => {
+    if (!open) return
+    const req = latestEffectiveRef.current
+    if (!req) return
+    hydrateFieldsFromRequirement(req)
+    setIsEditing(Boolean(isNewRequirement))
+  }, [open, effectiveRequirement?.id, isNewRequirement, hydrateFieldsFromRequirement])
+
+  const prevOpenRef = useRef(open)
+  useEffect(() => {
+    const prev = prevOpenRef.current
+    if (prev && !open) {
+      resetFormState()
+    }
+    prevOpenRef.current = open
+  }, [open])
+
+  const enterEditMode = () => {
+    const req = latestEffectiveRef.current
+    if (!req) return
+    hydrateFieldsFromRequirement(req)
+    setIsEditing(true)
+  }
+
   const tableDataForRender = isEditing
     ? editTableData
-    : (requirement?.tableData ?? { columns: [], rows: [] })
+    : (effectiveRequirement?.tableData ?? { columns: [], rows: [] })
 
   const availableTags = useMemo(() => {
     const tags = new Set<string>()
@@ -217,30 +283,29 @@ export function RequirementDrawer({
   }
 
   const handleSave = () => {
-    if (!requirement || !onSave) return
+    if (!effectiveRequirement || !onSave) return
     const updatedRequirement: RequirementDetail = {
-      ...requirement,
+      ...effectiveRequirement,
       title: editTitle,
       version: editVersion,
-      category: editCategory || requirement.category,
+      category: editCategory || effectiveRequirement.category,
       description: editDescription,
       tableData: editTableData,
     }
     onSave(updatedRequirement)
-    resetFormState()
     onOpenChange(false)
   }
 
   const handleDelete = () => {
-    if (!requirement || !onDelete) return
-    onDelete(requirement.id)
+    if (!effectiveRequirement || !onDelete) return
+    onDelete(effectiveRequirement.id)
     setDeleteDialogOpen(false)
     onOpenChange(false)
   }
 
-  if (!requirement) return null
+  if (!effectiveRequirement) return null
 
-  const accessibilityTitle = requirement.title?.trim() || "新建需求"
+  const accessibilityTitle = effectiveRequirement.title?.trim() || "新建需求"
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -277,16 +342,16 @@ export function RequirementDrawer({
                     {accessibilityTitle}
                   </div>
                   <Badge variant="secondary" className="text-[10px] h-5 px-2 bg-slate-100 text-slate-700 border border-slate-200">
-                    {requirement.version?.trim() ? requirement.version : "未设置版本"}
+                    {effectiveRequirement.version?.trim() ? effectiveRequirement.version : "未设置版本"}
                   </Badge>
                 </div>
               )}
               <SheetDescription className="sr-only">需求详情</SheetDescription>
               
-              {!isEditing && requirement.iterations > 1 && (
-                <button className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-sky-600 transition-colors group mt-2">
+              {!isEditing && effectiveRequirement.iterations > 1 && (
+                <button type="button" className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-sky-600 transition-colors group mt-2">
                   <History className="w-3 h-3" />
-                  <span>迭代 {requirement.iterations} 次</span>
+                  <span>迭代 {effectiveRequirement.iterations} 次</span>
                   <ChevronRight className="w-2.5 h-2.5 opacity-0 -ml-1 group-hover:opacity-100 group-hover:ml-0 transition-all" />
                 </button>
               )}
@@ -294,9 +359,14 @@ export function RequirementDrawer({
             
             {!isEditing && (
               <Button
+                type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => setIsEditing(true)}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  enterEditMode()
+                }}
                 className="shrink-0 gap-1.5 text-xs h-7"
               >
                 <Pencil className="w-3 h-3" />
@@ -338,14 +408,14 @@ export function RequirementDrawer({
             ) : (
               <div className="prose prose-sm prose-slate max-w-none">
                 <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap">
-                  {requirement.description}
+                  {effectiveRequirement.description}
                 </p>
               </div>
             )}
           </section>
 
           {/* Image Section - Conditional Rendering */}
-          {requirement.imageUrl && !isEditing && (
+          {effectiveRequirement.imageUrl && !isEditing && (
             <section>
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
                 <span className="w-0.5 h-3 bg-amber-500 rounded-full" />
@@ -511,7 +581,7 @@ export function RequirementDrawer({
                         确认删除？
                       </AlertDialogTitle>
                       <AlertDialogDescription className="text-slate-500">
-                        此操作将永久删除需求 &ldquo;<strong className="text-slate-700">{requirement.title}</strong>&rdquo;，包括所有测试用例和历史记录。
+                        此操作将永久删除需求 &ldquo;<strong className="text-slate-700">{effectiveRequirement.title}</strong>&rdquo;，包括所有测试用例和历史记录。
                         <br />
                         <span className="text-rose-500 text-xs mt-2 block">此操作无法撤销。</span>
                       </AlertDialogDescription>
@@ -534,21 +604,14 @@ export function RequirementDrawer({
               <Button
                 variant="ghost"
                 size="sm"
+                type="button"
                 onClick={() => {
                   if (isNewRequirement) {
                     onOpenChange(false)
                   } else {
                     setIsEditing(false)
-                    // Reset to original values
-                    setEditTitle(requirement.title)
-                    setEditVersion(requirement.version ?? "")
-                    setEditDescription(requirement.description)
-                    setEditCategory(requirement.category || availableCategories[0] || "core")
-                    if (requirement.tableData) {
-                      setEditTableData({
-                        columns: requirement.tableData.columns.map((c) => ({ ...c })),
-                        rows: requirement.tableData.rows.map((r) => ({ ...r })),
-                      })
+                    if (effectiveRequirement) {
+                      hydrateFieldsFromRequirement(effectiveRequirement)
                     }
                   }
                 }}
