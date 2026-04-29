@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -71,6 +72,184 @@ export interface NewRequirementDefaults {
   category: string
 }
 
+export type DescriptionBlockLevel = 1 | 2 | 3
+
+export interface DescriptionBlock {
+  id: string
+  text: string
+  level: DescriptionBlockLevel
+}
+
+export function newDescriptionBlockId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `blk-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+export function newDescriptionBlock(level: DescriptionBlockLevel = 1): DescriptionBlock {
+  return { id: newDescriptionBlockId(), text: "", level }
+}
+
+function clampDescriptionLevel(v: unknown): DescriptionBlockLevel {
+  const n = Number(v)
+  if (n === 2) return 2
+  if (n === 3) return 3
+  return 1
+}
+
+/** 将数据库 content（JSON 字符串）安全解析为块数组；兼容旧纯文本与历史 string[] */
+export function parseContentToDescriptionBlocks(raw: string | undefined | null): DescriptionBlock[] {
+  const s = String(raw ?? "").trim()
+  if (!s) return []
+  try {
+    const parsed = JSON.parse(s) as unknown
+    if (!Array.isArray(parsed)) {
+      return [{ id: newDescriptionBlockId(), text: s, level: 1 }]
+    }
+    if (parsed.length === 0) return []
+    if (parsed.every((x) => typeof x === "string")) {
+      return (parsed as string[]).map((text) => ({
+        id: newDescriptionBlockId(),
+        text,
+        level: 1 as DescriptionBlockLevel,
+      }))
+    }
+    if (parsed.every((x) => x !== null && typeof x === "object")) {
+      return (parsed as Record<string, unknown>[]).map((row) => ({
+        id: typeof row.id === "string" && row.id.trim() ? String(row.id) : newDescriptionBlockId(),
+        text: row.text != null ? String(row.text) : "",
+        level: clampDescriptionLevel(row.level),
+      }))
+    }
+  } catch {
+    // 非 JSON：整段作为一条 level 1
+  }
+  return [{ id: newDescriptionBlockId(), text: s, level: 1 }]
+}
+
+export function serializeDescriptionBlocksToContent(blocks: DescriptionBlock[]): string {
+  return JSON.stringify(blocks)
+}
+
+export function descriptionBlocksHaveVisibleContent(blocks: DescriptionBlock[]): boolean {
+  return blocks.some((b) => String(b.text).trim().length > 0)
+}
+
+/** 搜索栏拼接用纯文本 */
+export function getDescriptionSearchPlainText(raw: string | undefined | null): string {
+  return parseContentToDescriptionBlocks(raw)
+    .map((b) => b.text)
+    .join(" ")
+}
+
+/** 仅 Level 1 有可见序号（1. 2. …）；L2/L3 返回空串（无前缀符号）— 供编辑态使用 */
+export function computeOutlineLabels(blocks: { level: DescriptionBlockLevel }[]): string[] {
+  let n1 = 0
+  return blocks.map((b) => {
+    const L = Math.min(3, Math.max(1, b.level)) as DescriptionBlockLevel
+    if (L === 1) {
+      n1++
+      return `${n1}.`
+    }
+    return ""
+  })
+}
+
+/** 浏览态列表符号：L1 数字；L2 •；L3 ◦（配合固定宽 w-6 悬挂对齐） */
+function computeBrowseListMarkers(blocks: { level: DescriptionBlockLevel }[]): string[] {
+  let n1 = 0
+  return blocks.map((b) => {
+    const L = Math.min(3, Math.max(1, b.level)) as DescriptionBlockLevel
+    if (L === 1) {
+      n1++
+      return `${n1}.`
+    }
+    if (L === 2) return "•"
+    return "◦"
+  })
+}
+
+/** 纯缩进区分层级：L1 顶格，L2/L3 逐级加深 */
+function descriptionIndentPl(level: DescriptionBlockLevel): string {
+  switch (level) {
+    case 1:
+      return "pl-0"
+    case 2:
+      return "pl-6"
+    default:
+      return "pl-10"
+  }
+}
+
+/** L1 与正文之间留白；仅 L1 使用 */
+function descriptionLevelOneIndexClass(): string {
+  return "text-base tabular-nums text-slate-800 shrink-0 min-w-[2rem] text-right leading-relaxed"
+}
+
+function descriptionBodyClass(level: DescriptionBlockLevel): string {
+  switch (level) {
+    case 1:
+      return "text-base text-slate-800 leading-relaxed"
+    case 2:
+      return "text-sm text-slate-600 leading-snug"
+    default:
+      return "text-xs text-slate-400 leading-snug"
+  }
+}
+
+/** 浏览态正文：Notion 式嵌套列表用字重与灰度 */
+function browseDescriptionBodyClass(level: DescriptionBlockLevel): string {
+  switch (level) {
+    case 1:
+      return "text-base font-semibold text-slate-800 leading-relaxed"
+    case 2:
+      return "text-base text-slate-700 leading-relaxed"
+    default:
+      return "text-sm text-slate-600 leading-relaxed"
+  }
+}
+
+function browseListRowIndent(level: DescriptionBlockLevel): string {
+  switch (level) {
+    case 1:
+      return "ml-0"
+    case 2:
+      return "ml-5"
+    default:
+      return "ml-10"
+  }
+}
+
+/** 固定 w-6 符号列：数字右对齐，圆点居中 */
+function browseGlyphSpanClass(level: DescriptionBlockLevel): string {
+  switch (level) {
+    case 1:
+      return "text-right tabular-nums text-base font-semibold text-slate-800"
+    case 2:
+      return "text-center text-base text-slate-700"
+    default:
+      return "text-center text-sm text-slate-600"
+  }
+}
+
+/** L1 分段留白；同一 L1 下的 L2/L3 连续项紧凑 */
+function descriptionBlockVerticalSpacing(
+  level: DescriptionBlockLevel,
+  prevLevel: DescriptionBlockLevel | undefined,
+  index: number
+): string {
+  if (index === 0) {
+    return level === 1 ? "mt-0 mb-2" : "mt-0"
+  }
+  if (level === 1) return "mt-4 mb-2"
+  if (prevLevel === 1) return "mt-1"
+  return "mt-0.5"
+}
+
+const descriptionEditControlClass =
+  "border-slate-200 bg-white/80 shadow-none transition-colors hover:border-slate-300/90 hover:bg-slate-50/70 focus-visible:border-slate-300 focus-visible:ring-slate-200/40"
+
 interface RequirementDrawerProps {
   requirement: RequirementDetail | null
   open: boolean
@@ -119,7 +298,7 @@ export function RequirementDrawer({
   const [isEditing, setIsEditing] = useState(false)
   const [editTitle, setEditTitle] = useState("")
   const [editVersion, setEditVersion] = useState("")
-  const [editDescription, setEditDescription] = useState("")
+  const [editDescriptionBlocks, setEditDescriptionBlocks] = useState<DescriptionBlock[]>([])
   const [editCategory, setEditCategory] = useState("")
   const [tableFilter, setTableFilter] = useState("all")
   const [editTableData, setEditTableData] = useState<MatrixTableData>({ columns: [], rows: [] })
@@ -131,7 +310,7 @@ export function RequirementDrawer({
     setIsEditing(false)
     setEditTitle("")
     setEditVersion("")
-    setEditDescription("")
+    setEditDescriptionBlocks([])
     setEditCategory("")
     setTableFilter("all")
     setEditTableData(emptyTableData())
@@ -163,7 +342,7 @@ export function RequirementDrawer({
     const cats = availableCategoriesRef.current
     setEditTitle(req.title)
     setEditVersion(req.version ?? "")
-    setEditDescription(req.description)
+    setEditDescriptionBlocks(parseContentToDescriptionBlocks(req.description))
     setEditCategory(req.category || cats[0] || "core")
     if (req.tableData) {
       setEditTableData({
@@ -230,6 +409,53 @@ export function RequirementDrawer({
     return tableDataForRender.columns.filter((col) => col.tags.includes("all") || col.tags.includes(tableFilter))
   }, [tableDataForRender.columns, tableFilter])
 
+  const browseDescriptionBlocks = useMemo(
+    () => parseContentToDescriptionBlocks(effectiveRequirement?.description ?? ""),
+    [effectiveRequirement?.description]
+  )
+  const showBrowseDescription =
+    !isEditing && descriptionBlocksHaveVisibleContent(browseDescriptionBlocks)
+
+  const browseBlocksWithText = useMemo(
+    () => browseDescriptionBlocks.filter((b) => b.text.trim()),
+    [browseDescriptionBlocks]
+  )
+  const browseListMarkers = useMemo(
+    () => computeBrowseListMarkers(browseBlocksWithText),
+    [browseBlocksWithText]
+  )
+
+  const editOutlineLabels = useMemo(
+    () => computeOutlineLabels(editDescriptionBlocks),
+    [editDescriptionBlocks]
+  )
+
+  const updateBlockText = (index: number, text: string) => {
+    setEditDescriptionBlocks((prev) => {
+      const next = [...prev]
+      if (!next[index]) return prev
+      next[index] = { ...next[index], text }
+      return next
+    })
+  }
+
+  const updateBlockLevel = (index: number, level: DescriptionBlockLevel) => {
+    setEditDescriptionBlocks((prev) => {
+      const next = [...prev]
+      if (!next[index]) return prev
+      next[index] = { ...next[index], level }
+      return next
+    })
+  }
+
+  const removeDescriptionBlock = (index: number) => {
+    setEditDescriptionBlocks((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const addDescriptionBlock = () => {
+    setEditDescriptionBlocks((prev) => [...prev, newDescriptionBlock(1)])
+  }
+
   const handleTableCellEdit = (rowIndex: number, columnId: string, value: string) => {
     setEditTableData((prev) => {
       const rows = [...prev.rows]
@@ -289,7 +515,7 @@ export function RequirementDrawer({
       title: editTitle,
       version: editVersion,
       category: editCategory || effectiveRequirement.category,
-      description: editDescription,
+      description: serializeDescriptionBlocksToContent(editDescriptionBlocks),
       tableData: editTableData,
     }
     onSave(updatedRequirement)
@@ -378,7 +604,8 @@ export function RequirementDrawer({
 
         {/* Content Area */}
         <div className="p-5 space-y-6">
-          {/* Description Section */}
+          {/* Description：浏览态无有效内容时整块不渲染 */}
+          {(isEditing || showBrowseDescription) && (
           <section>
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
               <span className="w-0.5 h-3 bg-sky-500 rounded-full" />
@@ -399,20 +626,118 @@ export function RequirementDrawer({
               </div>
             )}
             {isEditing ? (
-              <textarea
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-                className="w-full min-h-32 p-3 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 resize-y"
-                placeholder="输入需求详情..."
-              />
+              <div className="flex flex-col">
+                {editDescriptionBlocks.map((block, index) => (
+                  <div
+                    key={block.id}
+                    className={cn(
+                      "flex items-start gap-2.5",
+                      descriptionIndentPl(block.level),
+                      descriptionBlockVerticalSpacing(
+                        block.level,
+                        editDescriptionBlocks[index - 1]?.level,
+                        index
+                      )
+                    )}
+                  >
+                    {block.level === 1 ? (
+                      <span
+                        className={cn(descriptionLevelOneIndexClass(), "pt-2 select-none")}
+                        aria-hidden
+                      >
+                        {editOutlineLabels[index]}
+                      </span>
+                    ) : null}
+                    <div className="flex min-w-0 flex-1 items-start gap-2">
+                      <Select
+                        value={String(block.level)}
+                        onValueChange={(v) =>
+                          updateBlockLevel(index, Number(v) as DescriptionBlockLevel)
+                        }
+                      >
+                        <SelectTrigger
+                          className={cn(
+                            "h-9 w-[4.25rem] shrink-0 px-2 text-xs",
+                            descriptionEditControlClass
+                          )}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1">1 级</SelectItem>
+                          <SelectItem value="2">2 级</SelectItem>
+                          <SelectItem value="3">3 级</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Textarea
+                        value={block.text}
+                        onChange={(e) => updateBlockText(index, e.target.value)}
+                        rows={Math.min(12, Math.max(2, block.text.split("\n").length + 1))}
+                        placeholder="输入描述内容…"
+                        className={cn(
+                          "min-h-11 flex-1 min-w-0 resize-y py-2",
+                          descriptionBodyClass(block.level),
+                          descriptionEditControlClass
+                        )}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 shrink-0 text-slate-400 hover:text-rose-600"
+                      onClick={() => removeDescriptionBlock(index)}
+                      aria-label="删除此行"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full h-10 text-xs text-slate-500 hover:text-slate-900 border-0 shadow-none"
+                  onClick={addDescriptionBlock}
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  添加描述行
+                </Button>
+              </div>
             ) : (
-              <div className="prose prose-sm prose-slate max-w-none">
-                <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap">
-                  {effectiveRequirement.description}
-                </p>
+              <div className="flex flex-col space-y-1.5">
+                {browseBlocksWithText.map((b, i) => (
+                  <div
+                    key={b.id}
+                    className={cn(
+                      "flex items-start gap-2",
+                      browseListRowIndent(b.level),
+                      b.level === 1 && i > 0 && "!mt-3"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "w-6 shrink-0 select-none pt-0.5",
+                        browseGlyphSpanClass(b.level)
+                      )}
+                      aria-hidden
+                    >
+                      {browseListMarkers[i]}
+                    </span>
+                    <div
+                      className={cn(
+                        "min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]",
+                        browseDescriptionBodyClass(b.level)
+                      )}
+                    >
+                      {b.text}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </section>
+          )}
 
           {/* Image Section - Conditional Rendering */}
           {effectiveRequirement.imageUrl && !isEditing && (

@@ -3,7 +3,11 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { RequirementCard } from "@/components/requirement-card"
 import { CategoryTabs, Category } from "@/components/category-tabs"
-import { RequirementDrawer, RequirementDetail } from "@/components/requirement-drawer"
+import {
+  RequirementDrawer,
+  RequirementDetail,
+  getDescriptionSearchPlainText,
+} from "@/components/requirement-drawer"
 import { TestExecutionDialog, TestCase } from "@/components/test-execution-dialog"
 import { IterationHistoryDialog, IterationRecord } from "@/components/iteration-history-dialog"
 
@@ -64,7 +68,8 @@ export function RequirementList({
     const done = req.testCases.length > 0 && req.testCases.every((tc) => tc.checked)
     if (statusFilter === "completed" && !done) return false
     if (statusFilter === "incomplete" && done) return false
-    const text = `${req.title} ${req.description}`.toLowerCase()
+    const descSearch = getDescriptionSearchPlainText(req.description)
+    const text = `${req.title} ${descSearch}`.toLowerCase()
     if (searchQuery.trim() && !text.includes(searchQuery.trim().toLowerCase())) return false
     return true
   })
