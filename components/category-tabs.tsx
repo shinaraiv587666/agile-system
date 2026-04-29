@@ -2,7 +2,38 @@
 
 import { useRef, useState, useEffect } from "react"
 import { cn } from "@/lib/utils"
-import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Check, X } from "lucide-react"
+import {
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+  LayoutGrid,
+  Globe,
+  Zap,
+  Sparkles,
+  Rocket,
+  Flame,
+  Compass,
+  Box,
+  Layers,
+  Cpu,
+  Orbit,
+  CircuitBoard,
+  Satellite,
+  Radar,
+  Telescope,
+  Atom,
+  Hexagon,
+  FlaskConical,
+  Shield,
+  Database,
+  Network,
+  User,
+  CreditCard,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -90,17 +121,47 @@ export function CategoryTabs({
     }
   }
 
-  const emojiFor = (id: string, name: string) => {
-    const key = (id || name || "").toLowerCase()
-    if (id === "all") return "📋"
-    if (key.includes("核心") || key.includes("core")) return "📦"
-    if (key.includes("广告") || key.includes("ads")) return "📈"
-    if (key.includes("配置") || key.includes("config")) return "⚙️"
-    if (key.includes("设计") || key.includes("ui") || key.includes("ux")) return "🎨"
-    if (key.includes("数据") || key.includes("analytics")) return "📊"
-    if (key.includes("用户") || key.includes("user")) return "👤"
-    if (key.includes("安全") || key.includes("security")) return "🛡️"
-    return "🗂️"
+  // Stable pseudo-random icon pick (no flicker between renders)
+  const ICON_POOL: any[] = [
+    Zap,
+    Sparkles,
+    Rocket,
+    Flame,
+    Compass,
+    Box,
+    Layers,
+    Cpu,
+    Orbit,
+    CircuitBoard,
+    Satellite,
+    Radar,
+    Telescope,
+    Atom,
+    Hexagon,
+    FlaskConical,
+    Shield,
+    Database,
+    Network,
+    User,
+    CreditCard,
+    // fallback icons (still deterministic) to ensure enough variety
+    Globe,
+    LayoutGrid,
+  ]
+
+  const hashAsciiSum = (s: string) => {
+    let sum = 0
+    const str = String(s ?? "")
+    for (let i = 0; i < str.length; i++) sum += str.charCodeAt(i)
+    return sum
+  }
+
+  const getCategoryIcon = (id: string, name: string) => {
+    // "All" is fixed icon
+    if (id === "all") return LayoutGrid
+    const key = `${id}::${name}`
+    const idx = hashAsciiSum(key) % ICON_POOL.length
+    return ICON_POOL[idx]
   }
 
   return (
@@ -166,7 +227,10 @@ export function CategoryTabs({
                         : "bg-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-900 border border-slate-200/70"
                     )}
                   >
-                    <span className="text-[13px] leading-none">{emojiFor(category.id, category.name)}</span>
+                    {(() => {
+                      const Icon = getCategoryIcon(category.id, category.name)
+                      return <Icon className="w-3.5 h-3.5" strokeWidth={2} />
+                    })()}
                     <span>{category.name}</span>
                     <span className={cn(
                       "min-w-5 h-5 rounded-full text-[10px] flex items-center justify-center",

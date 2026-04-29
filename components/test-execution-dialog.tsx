@@ -86,6 +86,7 @@ export function TestExecutionDialog({
 
   // Derive completion status using useMemo (NOT useState + useEffect)
   const allComplete = useMemo(() => {
+    // 业务规则：未配置用例（0 条）不算 Completed
     return localCases.length > 0 && localCases.every(tc => tc.checked)
   }, [localCases])
 

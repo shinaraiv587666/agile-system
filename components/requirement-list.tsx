@@ -19,7 +19,7 @@ interface RequirementListProps {
   onCreateNew: () => void
   createNewRequestId: number
   searchQuery: string
-  statusFilter: "all" | "completed" | "incomplete"
+  statusFilter: "all" | "completed" | "incomplete" | "noTest"
   requirements: RequirementDetail[]
   onAddCategory: (name: string) => Promise<void>
   onRenameCategory: (oldName: string, newName: string) => Promise<void>
@@ -65,9 +65,14 @@ export function RequirementList({
     : requirements.filter(r => r.category === activeCategory)
 
   const visibleRequirements = filteredRequirements.filter((req) => {
-    const done = req.testCases.length > 0 && req.testCases.every((tc) => tc.checked)
-    if (statusFilter === "completed" && !done) return false
-    if (statusFilter === "incomplete" && done) return false
+    const testStatus: "completed" | "incomplete" | "noTest" =
+      req.testCases.length === 0
+        ? "noTest"
+        : req.testCases.every((tc) => tc.checked)
+          ? "completed"
+          : "incomplete"
+
+    if (statusFilter !== "all" && statusFilter !== testStatus) return false
     const descSearch = getDescriptionSearchPlainText(req.description)
     const text = `${req.title} ${descSearch}`.toLowerCase()
     if (searchQuery.trim() && !text.includes(searchQuery.trim().toLowerCase())) return false
@@ -256,7 +261,13 @@ export function RequirementList({
             onClick={() => handleCardClick(requirement)}
             onTestClick={() => handleTestIconClick(requirement)}
             onIterationClick={() => handleIterationClick(requirement)}
-            isTestComplete={completedRequirements.has(requirement.id)}
+            testStatus={
+              requirement.testCases.length === 0
+                ? "noTest"
+                : requirement.testCases.every((tc) => tc.checked)
+                  ? "completed"
+                  : "incomplete"
+            }
             iterationCount={requirement.iterationHistory.length}
           />
         ))}

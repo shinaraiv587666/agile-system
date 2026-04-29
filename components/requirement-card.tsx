@@ -3,7 +3,7 @@
 import { Card, CardHeader, CardTitle, CardAction } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { CheckCircle2, History } from "lucide-react"
+import { CheckCircle2, History, FlaskConical } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 export interface Requirement {
@@ -19,7 +19,7 @@ interface RequirementCardProps {
   onClick?: () => void
   onTestClick?: () => void
   onIterationClick?: () => void
-  isTestComplete?: boolean
+  testStatus?: "completed" | "incomplete" | "noTest"
   iterationCount?: number
 }
 
@@ -35,7 +35,7 @@ export function RequirementCard({
   onClick,
   onTestClick,
   onIterationClick,
-  isTestComplete = false,
+  testStatus = "incomplete",
   iterationCount = 0,
 }: RequirementCardProps) {
   const handleTestIconClick = (e: React.MouseEvent) => {
@@ -57,7 +57,7 @@ export function RequirementCard({
           "group relative bg-white border-slate-200 hover:border-slate-300",
           "transition-all duration-200 ease-out cursor-pointer",
           "hover:shadow-xl hover:shadow-slate-300/40 hover:-translate-y-1",
-          isTestComplete && "ring-1 ring-emerald-200 border-emerald-200"
+          testStatus === "completed" && "ring-1 ring-green-200 border-green-200"
         )}
         style={{
           animationDelay: `${index * 20}ms`
@@ -99,10 +99,13 @@ export function RequirementCard({
                 <TooltipTrigger asChild>
                   <button
                     onClick={handleHistoryIconClick}
-                    className="shrink-0 p-1.5 -m-1 rounded-full hover:bg-slate-100 transition-colors text-slate-500 hover:text-slate-800"
+                      className={cn(
+                        "shrink-0 p-1 rounded-full hover:bg-slate-100 transition-colors",
+                        testStatus === "noTest" ? "text-slate-300" : "text-slate-400 hover:text-slate-700"
+                      )}
                     aria-label="查看版本历史"
                   >
-                    <History className="w-3.5 h-3.5" />
+                      <History className="w-4 h-4" strokeWidth={2} />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent sideOffset={6}>
@@ -114,38 +117,41 @@ export function RequirementCard({
                 <TooltipTrigger asChild>
                   <button
                     onClick={handleTestIconClick}
-                    className="relative shrink-0 p-1.5 -m-1 rounded-full hover:bg-slate-100 transition-colors"
-                    aria-label={isTestComplete ? "查看测试执行" : "执行测试用例"}
+                      className={cn(
+                        "shrink-0 p-1 rounded-full hover:bg-slate-100 transition-colors",
+                        testStatus === "completed"
+                          ? "text-emerald-500"
+                          : testStatus === "noTest"
+                            ? "text-slate-300"
+                            : "text-emerald-500"
+                      )}
+                      aria-label={
+                        testStatus === "completed"
+                          ? "查看测试执行"
+                          : testStatus === "noTest"
+                            ? "未配置用例"
+                            : "执行测试用例"
+                      }
                   >
-                    {isTestComplete ? (
-                      <div className="relative">
-                        <CheckCircle2 
+                      {testStatus === "completed" ? (
+                        <CheckCircle2 className="w-4 h-4" strokeWidth={2} />
+                      ) : (
+                        <FlaskConical
                           className={cn(
-                            "w-3.5 h-3.5 text-emerald-500 transition-all duration-300",
-                            "group-hover:scale-110"
+                            "w-4 h-4",
+                            testStatus === "noTest" ? "text-slate-300 opacity-100" : "text-emerald-500"
                           )}
+                          strokeWidth={2}
                         />
-                        <div className="absolute inset-0 bg-emerald-400/30 rounded-full blur-md opacity-60" />
-                      </div>
-                    ) : (
-                      <>
-                        <span 
-                          className={cn(
-                            "text-xs transition-all duration-200 block",
-                            "group-hover:scale-110 group-hover:rotate-6"
-                          )}
-                          role="img" 
-                          aria-label="测试标识"
-                        >
-                          🧪
-                        </span>
-                        <div className="absolute inset-0 bg-violet-400/30 rounded-full blur-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
-                      </>
-                    )}
+                      )}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent sideOffset={6}>
-                  {isTestComplete ? "查看测试执行（已完成）" : "点击执行测试用例"}
+                    {testStatus === "completed"
+                      ? "查看测试执行（已完成）"
+                      : testStatus === "noTest"
+                        ? "未配置用例"
+                        : "点击执行测试用例"}
                 </TooltipContent>
               </Tooltip>
             </div>

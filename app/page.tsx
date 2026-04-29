@@ -110,7 +110,7 @@ export default function Home() {
   const [requirements, setRequirements] = useState<RequirementDetail[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
-  const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "incomplete">("all")
+  const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "incomplete" | "noTest">("all")
   const [createNewRequestId, setCreateNewRequestId] = useState(0)
   const [supportsProjectId, setSupportsProjectId] = useState(true)
   const [visibleRequirementCount, setVisibleRequirementCount] = useState(0)
@@ -265,8 +265,8 @@ export default function Home() {
     setCompletedRequirements(
       new Set(
         mapped
-          .filter(r => r.testCases.length > 0 && r.testCases.every(tc => tc.checked))
-          .map(r => r.id)
+          .filter((r) => r.testCases.length > 0 && r.testCases.every((tc) => tc.checked))
+          .map((r) => r.id)
       )
     )
     setLoading(false)
@@ -572,7 +572,12 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-1.5 h-8 text-xs border rounded-md px-2 border-slate-200 bg-white text-slate-600">
             <Filter className="w-3 h-3" />
-            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as "all" | "completed" | "incomplete")}>
+            <Select
+              value={statusFilter}
+              onValueChange={(value) =>
+                setStatusFilter(value as "all" | "completed" | "incomplete" | "noTest")
+              }
+            >
               <SelectTrigger className="h-7 w-[120px] border-0 shadow-none px-1 text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -580,6 +585,7 @@ export default function Home() {
                 <SelectItem value="all">全部</SelectItem>
                 <SelectItem value="completed">已完成</SelectItem>
                 <SelectItem value="incomplete">未完成</SelectItem>
+                <SelectItem value="noTest">未配置用例</SelectItem>
               </SelectContent>
             </Select>
             <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
