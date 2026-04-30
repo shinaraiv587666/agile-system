@@ -1,6 +1,14 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react"
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useCallback,
+  type ClipboardEvent as ReactClipboardEvent,
+} from "react"
 import {
   Sheet,
   SheetContent,
@@ -291,15 +299,68 @@ function inferColumnTagsFromHeader(header: string): string[] {
   return m?.[1] ? [m[1]] : ["all"]
 }
 
-function parseClipboardTextToTableData(raw: string): MatrixTableData | null {
-  const lines = raw
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim().length > 0)
-  if (lines.length === 0) return null
+/**
+ * 解析 Excel / 飞书 剪贴板 TSV：制表符分列；含换行、制表符的单元格由双引号包裹；
+ * 引号内换行不得拆成新行；"" 表示字面双引号。
+ */
+function parseTsvToMatrix(raw: string): string[][] {
+  const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ""
+  let inQuotes = false
 
-  const matrix = lines.map((line) => line.split("\t"))
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += ch
+      }
+      continue
+    }
+    if (ch === '"') {
+      inQuotes = true
+      continue
+    }
+    if (ch === "\t") {
+      row.push(field)
+      field = ""
+      continue
+    }
+    if (ch === "\n") {
+      row.push(field)
+      field = ""
+      rows.push(row)
+      row = []
+      continue
+    }
+    field += ch
+  }
+  row.push(field)
+  rows.push(row)
+
+  while (rows.length > 0 && rows[rows.length - 1].every((c) => String(c).trim() === "")) {
+    rows.pop()
+  }
+  return rows
+}
+
+/** 粘贴区：保留浏览器默认粘贴行为；解析在确认导入时用 parseTsvToMatrix */
+function handleImportAreaPaste(_e: ReactClipboardEvent<HTMLTextAreaElement>) {
+  // 不 preventDefault：让含引号内换行的 TSV 原样进入 textarea
+}
+
+function parseClipboardTextToTableData(raw: string): MatrixTableData | null {
+  const matrix = parseTsvToMatrix(raw).filter((r) => r.some((cell) => String(cell).trim().length > 0))
+  if (matrix.length === 0) return null
+
   const width = Math.max(...matrix.map((r) => r.length))
   const headerCells = matrix[0] ?? []
 
@@ -321,6 +382,42 @@ function parseClipboardTextToTableData(raw: string): MatrixTableData | null {
     return row
   })
   return { columns, rows }
+}
+
+function TableMatrixCell({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (next: string) => void
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null)
+  const adjust = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${Math.max(60, el.scrollHeight)}px`
+  }, [])
+
+  useLayoutEffect(() => {
+    adjust()
+  }, [value, adjust])
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onInput={adjust}
+      spellCheck={false}
+      className={cn(
+        "w-full min-w-[120px] min-h-[60px] resize-y rounded-sm",
+        "border-0 bg-transparent px-2 py-1.5 text-xs leading-relaxed text-slate-800",
+        "shadow-none outline-none ring-0 transition-[height]",
+        "focus-visible:ring-1 focus-visible:ring-slate-200/70"
+      )}
+    />
+  )
 }
 
 function mergeTableDataForImport(existing: MatrixTableData, incoming: MatrixTableData, append: boolean): MatrixTableData {
@@ -973,6 +1070,7 @@ export function RequirementDrawer({
                     <Textarea
                       value={clipboardText}
                       onChange={(e) => setClipboardText(e.target.value)}
+                      onPaste={handleImportAreaPaste}
                       rows={8}
                       placeholder={"示例：\n07广告位\t状态\t负责人\n首页Banner\t进行中\t小王"}
                       className="text-xs bg-white border-slate-200"
@@ -1110,19 +1208,20 @@ export function RequirementDrawer({
                           <td
                             key={`${row.id}-${col.id}`}
                             className={cn(
-                              "px-2 py-1.5 whitespace-normal break-words",
+                              "px-2 py-1.5 align-top whitespace-normal break-words",
                               minWidthClass,
                               colIndex === 0 && "sticky left-0 bg-white z-10"
                             )}
                           >
                             {isEditing ? (
-                              <Input
+                              <TableMatrixCell
                                 value={row[col.id] ?? ""}
-                                onChange={(e) => handleTableCellEdit(rowIndex, col.id, e.target.value)}
-                                className="w-full min-w-[120px] h-8 text-xs px-2 bg-white"
+                                onChange={(next) => handleTableCellEdit(rowIndex, col.id, next)}
                               />
                             ) : (
-                              <span className="text-slate-700">{row[col.id] ?? "-"}</span>
+                              <span className="whitespace-pre-wrap break-words text-slate-700">
+                                {String(row[col.id] ?? "").trim() === "" ? "-" : String(row[col.id] ?? "")}
+                              </span>
                             )}
                           </td>
                         )})}
