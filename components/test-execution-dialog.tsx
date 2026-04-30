@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef, useMemo, type ClipboardEvent as ReactClipboardEvent } from "react"
 import {
   Sheet,
   SheetContent,
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Accordion,
   AccordionContent,
@@ -28,7 +29,8 @@ import {
   X, 
   Save,
   ChevronDown,
-  ListChecks
+  ListChecks,
+  ClipboardPaste
 } from "lucide-react"
 
 // 5-field test case structure
@@ -52,6 +54,55 @@ interface TestExecutionDialogProps {
   onAllComplete: (allComplete: boolean) => void
 }
 
+function parseTsvToMatrix(raw: string): string[][] {
+  const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ""
+  let inQuotes = false
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inQuotes) {
+      if (ch === "\"") {
+        if (text[i + 1] === "\"") {
+          field += "\""
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += ch
+      }
+      continue
+    }
+    if (ch === "\"") {
+      inQuotes = true
+      continue
+    }
+    if (ch === "\t") {
+      row.push(field)
+      field = ""
+      continue
+    }
+    if (ch === "\n") {
+      row.push(field)
+      field = ""
+      rows.push(row)
+      row = []
+      continue
+    }
+    field += ch
+  }
+  row.push(field)
+  rows.push(row)
+
+  while (rows.length > 0 && rows[rows.length - 1].every((c) => String(c).trim() === "")) {
+    rows.pop()
+  }
+  return rows
+}
+
 export function TestExecutionDialog({
   open,
   onOpenChange,
@@ -70,6 +121,8 @@ export function TestExecutionDialog({
   const [addForm, setAddForm] = useState<Omit<TestCase, "id" | "checked">>({
     number: "", title: "", precondition: "", steps: "", expected: ""
   })
+  const [isBulkPasting, setIsBulkPasting] = useState(false)
+  const [bulkPasteText, setBulkPasteText] = useState("")
   const [expandedItems, setExpandedItems] = useState<string[]>([])
 
   // Store onAllComplete in a ref to avoid triggering effects on callback change
@@ -159,6 +212,33 @@ export function TestExecutionDialog({
     setAddForm({ number: "", title: "", precondition: "", steps: "", expected: "" })
   }
 
+  const handleBulkPasteImport = () => {
+    const rows = parseTsvToMatrix(bulkPasteText)
+      .map((cols) => cols.map((x) => String(x ?? "")))
+      .filter((cols) => cols.some((cell) => cell.trim().length > 0))
+    if (rows.length === 0) return
+
+    const appended: TestCase[] = rows.map((cols, idx) => ({
+      id: `${requirementId}-tc-bulk-${Date.now()}-${idx}`,
+      number: cols[0] ?? "",
+      title: cols[1] ?? "",
+      precondition: cols[2] ?? "",
+      steps: cols[3] ?? "",
+      expected: cols[4] ?? "",
+      checked: false,
+    }))
+
+    const updated = [...localCases, ...appended]
+    setLocalCases(updated)
+    onTestCasesChange(updated)
+    setBulkPasteText("")
+    setIsBulkPasting(false)
+  }
+
+  const handleBulkPasteAreaPaste = (_e: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    // Keep browser default paste behavior; parse happens on import
+  }
+
   const completedCount = localCases.filter(tc => tc.checked).length
 
   const toggleExpanded = (id: string) => {
@@ -193,15 +273,34 @@ export function TestExecutionDialog({
               >
                 {completedCount} / {localCases.length}
               </Badge>
-              {!isAdding && !editingId && (
-                <Button
-                  size="sm"
-                  onClick={() => setIsAdding(true)}
-                  className="gap-1.5 text-sm h-9 bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition-all duration-200 hover:shadow-md"
-                >
-                  <Plus className="w-4 h-4" />
-                  新增用例
-                </Button>
+              {!editingId && (
+                <div className="flex items-center gap-2">
+                  {!isAdding && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setIsBulkPasting(false)
+                        setIsAdding(true)
+                      }}
+                      className="gap-1.5 text-sm h-9 bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition-all duration-200 hover:shadow-md"
+                    >
+                      <Plus className="w-4 h-4" />
+                      新增用例
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setIsAdding(false)
+                      setIsBulkPasting((prev) => !prev)
+                    }}
+                    className="gap-1.5 text-sm h-9 border-slate-200 text-slate-600 hover:text-slate-900"
+                  >
+                    <ClipboardPaste className="w-4 h-4" />
+                    批量粘贴
+                  </Button>
+                </div>
               )}
             </div>
           </div>
@@ -212,6 +311,43 @@ export function TestExecutionDialog({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 min-h-0">
+          {isBulkPasting && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+              <p className="text-xs text-slate-600">
+                请确保从 Excel 复制的数据包含 5 列，顺序依次为：编号 | 标题 | 前置条件 | 步骤 | 预期结果
+              </p>
+              <Textarea
+                value={bulkPasteText}
+                onChange={(e) => setBulkPasteText(e.target.value)}
+                onPaste={handleBulkPasteAreaPaste}
+                rows={8}
+                placeholder={"示例：\nTC-001\t登录成功\t账号已注册\t输入账号密码并点击登录\t进入首页"}
+                className="text-xs border-slate-200 bg-white"
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => {
+                    setBulkPasteText("")
+                    setIsBulkPasting(false)
+                  }}
+                >
+                  取消
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={handleBulkPasteImport}
+                  disabled={!bulkPasteText.trim()}
+                >
+                  追加导入
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Add new form */}
           {isAdding && (
             <div className="bg-gradient-to-br from-violet-50 to-purple-50 border border-violet-200 rounded-xl p-5 mb-5 animate-in fade-in slide-in-from-top-2 duration-200 shadow-sm">
