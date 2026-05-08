@@ -50,7 +50,7 @@ interface TestExecutionDialogProps {
   requirementId: string
   requirementTitle: string
   testCases: TestCase[]
-  onTestCasesChange: (testCases: TestCase[]) => void
+  onCommitTestCases: (testCases: TestCase[]) => Promise<void> | void
   onAllComplete: (allComplete: boolean) => void
 }
 
@@ -109,7 +109,7 @@ export function TestExecutionDialog({
   requirementId,
   requirementTitle,
   testCases,
-  onTestCasesChange,
+  onCommitTestCases,
   onAllComplete,
 }: TestExecutionDialogProps) {
   const [localCases, setLocalCases] = useState<TestCase[]>(testCases)
@@ -124,6 +124,7 @@ export function TestExecutionDialog({
   const [isBulkPasting, setIsBulkPasting] = useState(false)
   const [bulkPasteText, setBulkPasteText] = useState("")
   const [expandedItems, setExpandedItems] = useState<string[]>([])
+  const [isSavingOnClose, setIsSavingOnClose] = useState(false)
 
   // Store onAllComplete in a ref to avoid triggering effects on callback change
   const onAllCompleteRef = useRef(onAllComplete)
@@ -132,10 +133,35 @@ export function TestExecutionDialog({
   // Track previous completion status to avoid redundant calls
   const prevAllCompleteRef = useRef<boolean | null>(null)
 
-  // Sync with props
+  const snapshotCases = (cases: TestCase[]) =>
+    JSON.stringify(
+      cases.map((tc) => ({
+        id: tc.id,
+        number: tc.number,
+        title: tc.title,
+        precondition: tc.precondition,
+        steps: tc.steps,
+        expected: tc.expected,
+        checked: tc.checked,
+      }))
+    )
+  const [initialSnapshot, setInitialSnapshot] = useState<string>(snapshotCases(testCases))
+
+  // Sync with props when opening
   useEffect(() => {
+    if (!open) return
     setLocalCases(testCases)
-  }, [testCases])
+    setInitialSnapshot(snapshotCases(testCases))
+    setIsAdding(false)
+    setIsBulkPasting(false)
+    setBulkPasteText("")
+    setEditingId(null)
+  }, [open, testCases])
+
+  const hasUnsavedChanges = useMemo(
+    () => snapshotCases(localCases) !== initialSnapshot,
+    [localCases, initialSnapshot]
+  )
 
   // Derive completion status using useMemo (NOT useState + useEffect)
   const allComplete = useMemo(() => {
@@ -157,7 +183,6 @@ export function TestExecutionDialog({
       tc.id === id ? { ...tc, checked: !tc.checked } : tc
     )
     setLocalCases(updated)
-    onTestCasesChange(updated)
   }
 
   const handleEdit = (tc: TestCase, e: React.MouseEvent) => {
@@ -183,7 +208,6 @@ export function TestExecutionDialog({
       tc.id === editingId ? { ...tc, ...editForm } : tc
     )
     setLocalCases(updated)
-    onTestCasesChange(updated)
     setEditingId(null)
   }
 
@@ -191,7 +215,6 @@ export function TestExecutionDialog({
     e.stopPropagation()
     const updated = localCases.filter(tc => tc.id !== id)
     setLocalCases(updated)
-    onTestCasesChange(updated)
   }
 
   const handleAddNew = () => {
@@ -207,7 +230,6 @@ export function TestExecutionDialog({
     }
     const updated = [...localCases, newCase]
     setLocalCases(updated)
-    onTestCasesChange(updated)
     setIsAdding(false)
     setAddForm({ number: "", title: "", precondition: "", steps: "", expected: "" })
   }
@@ -230,7 +252,6 @@ export function TestExecutionDialog({
 
     const updated = [...localCases, ...appended]
     setLocalCases(updated)
-    onTestCasesChange(updated)
     setBulkPasteText("")
     setIsBulkPasting(false)
   }
@@ -245,8 +266,40 @@ export function TestExecutionDialog({
     setExpandedItems((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id])
   }
 
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!open || !hasUnsavedChanges) return
+      e.preventDefault()
+      e.returnValue = "您有未保存的更改，确定要离开吗？"
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [open, hasUnsavedChanges])
+
+  const handleDialogOpenChange = async (nextOpen: boolean) => {
+    if (nextOpen) {
+      onOpenChange(true)
+      return
+    }
+    if (isSavingOnClose) return
+    try {
+      if (hasUnsavedChanges) {
+        setIsSavingOnClose(true)
+        await onCommitTestCases(localCases)
+        setInitialSnapshot(snapshotCases(localCases))
+      }
+      onOpenChange(false)
+    } catch (error) {
+      console.error("Failed to persist test cases on close:", error instanceof Error ? error.message : String(error))
+      // Keep drawer open on save failure to avoid silent data loss
+      return
+    } finally {
+      setIsSavingOnClose(false)
+    }
+  }
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleDialogOpenChange}>
       <SheetContent side="right" className="w-[95vw] sm:max-w-4xl overflow-hidden flex flex-col p-0">
         {/* Header */}
         <SheetHeader className="p-6 pb-5 border-b border-slate-100 shrink-0">

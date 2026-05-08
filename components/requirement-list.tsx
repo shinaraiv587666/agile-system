@@ -113,19 +113,16 @@ export function RequirementList({
     setIterationSheetOpen(true)
   }, [])
 
-  const handleTestCasesChange = useCallback(async (testCases: TestCase[]) => {
+  const handleCommitTestCases = useCallback(async (testCases: TestCase[]) => {
     if (!testingRequirement) return
     try {
-      const updated = requirements.map(r =>
-        r.id === testingRequirement.id ? { ...r, testCases } : r
-      )
-      await onRequirementsChange(updated)
-      setTestingRequirement(prev => prev ? { ...prev, testCases } : null)
+      // Drawer edits are local; persist once when closing.
       await onPersistTestCases(testingRequirement.id, testCases)
+      setTestingRequirement(prev => prev ? { ...prev, testCases } : null)
     } catch (error) {
-      console.error("Failed to update test cases:", error instanceof Error ? error.message : String(error))
+      console.error("Failed to persist test cases:", error instanceof Error ? error.message : String(error))
     }
-  }, [testingRequirement, requirements, onRequirementsChange, onPersistTestCases])
+  }, [testingRequirement, onPersistTestCases])
 
   const handleAllComplete = useCallback((allComplete: boolean) => {
     if (!testingRequirement) return
@@ -305,11 +302,16 @@ export function RequirementList({
       {/* Test Execution Dialog */}
       <TestExecutionDialog
         open={testDialogOpen}
-        onOpenChange={setTestDialogOpen}
+        onOpenChange={(next) => {
+          setTestDialogOpen(next)
+          if (!next) {
+            setTestingRequirement(null)
+          }
+        }}
         requirementId={testingRequirement?.id ?? ""}
         requirementTitle={testingRequirement?.title ?? ""}
         testCases={testingRequirement?.testCases ?? []}
-        onTestCasesChange={handleTestCasesChange}
+        onCommitTestCases={handleCommitTestCases}
         onAllComplete={handleAllComplete}
       />
 
