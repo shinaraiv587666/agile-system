@@ -408,20 +408,34 @@ export default function Home() {
       if (error) throw error
     }
 
-    for (const iteration of nextIterations) {
-      const payload = {
+    const now = new Date().toISOString()
+    const existingPayloads = nextIterations
+      .filter((it) => isUuid(it.id))
+      .map((it) => ({
+        id: it.id,
         requirement_id: requirementId,
-        version: iteration.version,
-        change_log: iteration.changes,
-        modified_at: new Date().toISOString(),
-      }
-      if (isUuid(iteration.id)) {
-        const { error } = await supabase.from("iterations").update(payload).eq("id", iteration.id)
-        if (error) throw error
-      } else {
-        const { error } = await supabase.from("iterations").insert(payload)
-        if (error) throw error
-      }
+        version: it.version,
+        change_log: it.changes,
+        modified_at: now,
+      }))
+    if (existingPayloads.length > 0) {
+      const { error } = await supabase
+        .from("iterations")
+        .upsert(existingPayloads, { onConflict: "id" })
+      if (error) throw error
+    }
+
+    const newPayloads = nextIterations
+      .filter((it) => !isUuid(it.id))
+      .map((it) => ({
+        requirement_id: requirementId,
+        version: it.version,
+        change_log: it.changes,
+        modified_at: now,
+      }))
+    if (newPayloads.length > 0) {
+      const { error } = await supabase.from("iterations").insert(newPayloads)
+      if (error) throw error
     }
     await fetchAllData()
   }, [fetchAllData, requirements])

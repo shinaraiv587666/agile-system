@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import {
   Sheet,
   SheetContent,
@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { GitCommit, Plus, Pencil, Trash2, X, Save } from "lucide-react"
+import { GitCommit, Loader2, Plus, Pencil, Trash2, X, Save } from "lucide-react"
 
 export interface IterationRecord {
   id: string
@@ -24,7 +24,7 @@ interface IterationHistoryDialogProps {
   onOpenChange: (open: boolean) => void
   title: string
   iterations: IterationRecord[]
-  onIterationsChange?: (iterations: IterationRecord[]) => void
+  onCommitIterations?: (iterations: IterationRecord[]) => Promise<void> | void
 }
 
 export function IterationHistoryDialog({
@@ -32,18 +32,31 @@ export function IterationHistoryDialog({
   onOpenChange,
   title,
   iterations,
-  onIterationsChange,
+  onCommitIterations,
 }: IterationHistoryDialogProps) {
   const [localIterations, setLocalIterations] = useState<IterationRecord[]>(iterations)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ version: "", changes: "" })
   const [isAdding, setIsAdding] = useState(false)
   const [addForm, setAddForm] = useState({ version: "", changes: "" })
+  const [isSavingOnClose, setIsSavingOnClose] = useState(false)
+  const snapshot = (rows: IterationRecord[]) =>
+    JSON.stringify(rows.map((r) => ({ id: r.id, version: r.version, changes: r.changes })))
+  const [initialSnapshot, setInitialSnapshot] = useState<string>(snapshot(iterations))
+  const hasUnsavedChanges = useMemo(
+    () => snapshot(localIterations) !== initialSnapshot,
+    [localIterations, initialSnapshot]
+  )
 
-  // Sync with props
+  // Sync with props when dialog opens
   useEffect(() => {
-    setLocalIterations(iterations)
-  }, [iterations])
+    if (!open) return
+    setLocalIterations(iterations.map((r) => ({ ...r })))
+    setInitialSnapshot(snapshot(iterations))
+    setEditingId(null)
+    setIsAdding(false)
+    setAddForm({ version: "", changes: "" })
+  }, [open, iterations])
 
   const handleEdit = (record: IterationRecord) => {
     setEditingId(record.id)
@@ -59,14 +72,12 @@ export function IterationHistoryDialog({
         : r
     )
     setLocalIterations(updated)
-    onIterationsChange?.(updated)
     setEditingId(null)
   }
 
   const handleDelete = (id: string) => {
     const updated = localIterations.filter(r => r.id !== id)
     setLocalIterations(updated)
-    onIterationsChange?.(updated)
   }
 
   const handleAddNew = () => {
@@ -78,14 +89,47 @@ export function IterationHistoryDialog({
     }
     const updated = [newRecord, ...localIterations]
     setLocalIterations(updated)
-    onIterationsChange?.(updated)
     setIsAdding(false)
     setAddForm({ version: "", changes: "" })
   }
 
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!open || !hasUnsavedChanges) return
+      e.preventDefault()
+      e.returnValue = "您有未保存的更改，确定要离开吗？"
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [open, hasUnsavedChanges])
+
+  const handleSheetOpenChange = async (nextOpen: boolean) => {
+    if (nextOpen) {
+      onOpenChange(true)
+      return
+    }
+    if (isSavingOnClose) return
+    try {
+      if (hasUnsavedChanges) {
+        setIsSavingOnClose(true)
+        await onCommitIterations?.(localIterations)
+        setInitialSnapshot(snapshot(localIterations))
+      }
+      onOpenChange(false)
+    } catch (error) {
+      console.error("Failed to persist iterations on close:", error instanceof Error ? error.message : String(error))
+      return
+    } finally {
+      setIsSavingOnClose(false)
+    }
+  }
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[95vw] sm:max-w-4xl p-0 overflow-hidden">
+    <Sheet open={open} onOpenChange={handleSheetOpenChange}>
+      <SheetContent
+        side="right"
+        className={cn("w-[95vw] sm:max-w-4xl p-0 overflow-hidden", isSavingOnClose && "pointer-events-none")}
+      >
         <SheetHeader className="pb-4 border-b border-slate-100">
           <SheetTitle className="sr-only">{title || "迭代历史"}</SheetTitle>
           <div className="flex items-center justify-between text-slate-800 px-4 pt-4">
@@ -95,16 +139,25 @@ export function IterationHistoryDialog({
               </div>
               <span className="text-base font-semibold">迭代历史</span>
             </div>
-            {!isAdding && (
-              <Button
-                size="sm"
-                onClick={() => { setIsAdding(true); setEditingId(null) }}
-                className="gap-1.5 text-xs h-8 bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition-all duration-200 hover:shadow-md"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                新增记录
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {!isAdding && (
+                <Button
+                  size="sm"
+                  onClick={() => { setIsAdding(true); setEditingId(null) }}
+                  disabled={isSavingOnClose}
+                  className="gap-1.5 text-xs h-8 bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition-all duration-200 hover:shadow-md"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  新增记录
+                </Button>
+              )}
+              {isSavingOnClose && (
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  保存中...
+                </div>
+              )}
+            </div>
           </div>
           <SheetDescription className="text-slate-500 line-clamp-1 mt-1 px-4">
             {title}

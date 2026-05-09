@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils"
 import { 
   FlaskConical, 
   CheckCircle2, 
+  Loader2,
   Plus, 
   Pencil, 
   Trash2, 
@@ -300,7 +301,13 @@ export function TestExecutionDialog({
 
   return (
     <Sheet open={open} onOpenChange={handleDialogOpenChange}>
-      <SheetContent side="right" className="w-[95vw] sm:max-w-4xl overflow-hidden flex flex-col p-0">
+      <SheetContent
+        side="right"
+        className={cn(
+          "w-[95vw] sm:max-w-4xl overflow-hidden flex flex-col p-0",
+          isSavingOnClose && "pointer-events-none"
+        )}
+      >
         {/* Header */}
         <SheetHeader className="p-6 pb-5 border-b border-slate-100 shrink-0">
           <SheetTitle className="sr-only">{requirementTitle || "测试用例"}</SheetTitle>
@@ -335,6 +342,7 @@ export function TestExecutionDialog({
                         setIsBulkPasting(false)
                         setIsAdding(true)
                       }}
+                      disabled={isSavingOnClose}
                       className="gap-1.5 text-sm h-9 bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition-all duration-200 hover:shadow-md"
                     >
                       <Plus className="w-4 h-4" />
@@ -348,11 +356,18 @@ export function TestExecutionDialog({
                       setIsAdding(false)
                       setIsBulkPasting((prev) => !prev)
                     }}
+                    disabled={isSavingOnClose}
                     className="gap-1.5 text-sm h-9 border-slate-200 text-slate-600 hover:text-slate-900"
                   >
                     <ClipboardPaste className="w-4 h-4" />
                     批量粘贴
                   </Button>
+                </div>
+              )}
+              {isSavingOnClose && (
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  保存中...
                 </div>
               )}
             </div>

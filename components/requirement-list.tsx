@@ -216,20 +216,13 @@ export function RequirementList({
     }
   }, [activeCategory, projectCategories])
 
-  const handleIterationHistoryChange = useCallback(async (requirementId: string, iterations: IterationRecord[]) => {
+  const handleCommitIterations = useCallback(async (requirementId: string, iterations: IterationRecord[]) => {
     try {
-      await onRequirementsChange(
-        requirements.map(r =>
-          r.id === requirementId
-            ? { ...r, iterationHistory: iterations, iterations: iterations.length || 1 }
-            : r
-        )
-      )
       await onPersistIterations(requirementId, iterations)
     } catch (error) {
-      console.error("Failed to save iteration history:", error instanceof Error ? error.message : String(error))
+      console.error("Failed to persist iteration history:", error instanceof Error ? error.message : String(error))
     }
-  }, [onPersistIterations, onRequirementsChange, requirements])
+  }, [onPersistIterations])
 
   return (
     <div className="space-y-4">
@@ -317,12 +310,17 @@ export function RequirementList({
 
       <IterationHistoryDialog
         open={iterationSheetOpen}
-        onOpenChange={setIterationSheetOpen}
+        onOpenChange={(next) => {
+          setIterationSheetOpen(next)
+          if (!next) {
+            setIterationRequirement(null)
+          }
+        }}
         title={iterationRequirement?.title ?? "迭代历史"}
         iterations={iterationRequirement?.iterationHistory ?? []}
-        onIterationsChange={(iterations) => {
+        onCommitIterations={(iterations) => {
           if (!iterationRequirement) return
-          handleIterationHistoryChange(iterationRequirement.id, iterations)
+          handleCommitIterations(iterationRequirement.id, iterations)
           setIterationRequirement((prev) => prev ? { ...prev, iterationHistory: iterations } : prev)
         }}
       />
