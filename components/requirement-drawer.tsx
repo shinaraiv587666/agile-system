@@ -40,7 +40,21 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { cn, uniqueClientId } from "@/lib/utils"
-import { History, ChevronRight, Pencil, X, Plus, Trash2, Save, Columns3, ClipboardPaste, Check } from "lucide-react"
+import {
+  History,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  Pencil,
+  X,
+  Plus,
+  Trash2,
+  Save,
+  Columns3,
+  ClipboardPaste,
+  Check,
+} from "lucide-react"
 import { TestCase } from "@/components/test-execution-dialog"
 import { IterationRecord } from "@/components/iteration-history-dialog"
 
@@ -81,7 +95,7 @@ export interface NewRequirementDefaults {
   category: string
 }
 
-export type DescriptionBlockLevel = 1 | 2 | 3
+export type DescriptionBlockLevel = 1 | 2 | 3 | 4
 
 export interface DescriptionBlock {
   id: string
@@ -98,9 +112,9 @@ export function newDescriptionBlock(level: DescriptionBlockLevel = 1): Descripti
 }
 
 function clampDescriptionLevel(v: unknown): DescriptionBlockLevel {
-  const n = Number(v)
-  if (n === 2) return 2
-  if (n === 3) return 3
+  const n = Math.round(Number(v))
+  if (n >= 1 && n <= 4) return n as DescriptionBlockLevel
+  if (n === 5) return 4
   return 1
 }
 
@@ -149,48 +163,35 @@ export function getDescriptionSearchPlainText(raw: string | undefined | null): s
     .join(" ")
 }
 
-/** 仅 Level 1 有可见序号（1. 2. …）；L2/L3 返回空串（无前缀符号）— 供编辑态使用 */
+/** 与列表前缀一致（L1 无序号；L2 递增 1. 2. …；L3 •；L4 ◦） */
 export function computeOutlineLabels(blocks: { level: DescriptionBlockLevel }[]): string[] {
-  let n1 = 0
-  return blocks.map((b) => {
-    const L = Math.min(3, Math.max(1, b.level)) as DescriptionBlockLevel
-    if (L === 1) {
-      n1++
-      return `${n1}.`
-    }
-    return ""
-  })
+  return computeBlockListMarkers(blocks)
 }
 
-/** 浏览态列表符号：L1 数字；L2 •；L3 ◦（配合固定宽 w-6 悬挂对齐） */
-function computeBrowseListMarkers(blocks: { level: DescriptionBlockLevel }[]): string[] {
-  let n1 = 0
+/** 编辑/浏览共用：L1 无前缀（且重置 L2 计数）；L2 在每个 L1 后从 1 重新递增；L3 •；L4 ◦ */
+function computeBlockListMarkers(blocks: { level: DescriptionBlockLevel }[]): string[] {
+  let n2 = 0
   return blocks.map((b) => {
-    const L = Math.min(3, Math.max(1, b.level)) as DescriptionBlockLevel
+    const L = Math.min(4, Math.max(1, b.level)) as DescriptionBlockLevel
     if (L === 1) {
-      n1++
-      return `${n1}.`
+      n2 = 0
+      return ""
     }
-    if (L === 2) return "•"
+    if (L === 2) {
+      n2++
+      return `${n2}.`
+    }
+    if (L === 3) return "•"
     return "◦"
   })
 }
 
-/** 纯缩进区分层级：L1 顶格，L2/L3 逐级加深 */
-function descriptionIndentPl(level: DescriptionBlockLevel): string {
-  switch (level) {
-    case 1:
-      return "pl-0"
-    case 2:
-      return "pl-6"
-    default:
-      return "pl-10"
-  }
-}
-
-/** L1 与正文之间留白；仅 L1 使用 */
-function descriptionLevelOneIndexClass(): string {
-  return "text-base tabular-nums text-slate-800 shrink-0 min-w-[2rem] text-right leading-relaxed"
+/** 浏览模式 L2–L4：剥除用户粘贴自带的列表前缀与缩进（L1 大标题不使用，避免误伤正文） */
+function cleanViewListBodyText(raw: string): string {
+  return (raw || "")
+    .replace(/^[\s\-*•◦\d.]+(?=\s)/, "")
+    .replace(/^[\s\-*•◦]+/, "")
+    .trim()
 }
 
 function descriptionBodyClass(level: DescriptionBlockLevel): string {
@@ -198,59 +199,25 @@ function descriptionBodyClass(level: DescriptionBlockLevel): string {
     case 1:
       return "text-base text-slate-800 leading-relaxed"
     case 2:
-      return "text-sm text-slate-600 leading-snug"
-    default:
-      return "text-xs text-slate-400 leading-snug"
+      return "text-base font-medium text-slate-700 leading-relaxed"
+    case 3:
+      return "text-sm font-normal text-slate-600 leading-relaxed"
+    case 4:
+      return "text-sm font-normal text-slate-500 leading-relaxed"
   }
 }
 
-/** 浏览态正文：Notion 式嵌套列表用字重与灰度 */
-function browseDescriptionBodyClass(level: DescriptionBlockLevel): string {
+function editBlockGlyphClass(level: DescriptionBlockLevel): string {
   switch (level) {
     case 1:
-      return "text-base font-semibold text-slate-800 leading-relaxed"
+      return "text-right tabular-nums text-sm font-normal text-slate-400"
     case 2:
-      return "text-base text-slate-700 leading-relaxed"
-    default:
-      return "text-sm text-slate-600 leading-relaxed"
+      return "text-right tabular-nums text-sm font-medium text-slate-700"
+    case 3:
+      return "text-center text-sm font-normal text-slate-600"
+    case 4:
+      return "text-center text-sm font-normal text-slate-500"
   }
-}
-
-function browseListRowIndent(level: DescriptionBlockLevel): string {
-  switch (level) {
-    case 1:
-      return "ml-0"
-    case 2:
-      return "ml-5"
-    default:
-      return "ml-10"
-  }
-}
-
-/** 固定 w-6 符号列：数字右对齐，圆点居中 */
-function browseGlyphSpanClass(level: DescriptionBlockLevel): string {
-  switch (level) {
-    case 1:
-      return "text-right tabular-nums text-base font-semibold text-slate-800"
-    case 2:
-      return "text-center text-base text-slate-700"
-    default:
-      return "text-center text-sm text-slate-600"
-  }
-}
-
-/** L1 分段留白；同一 L1 下的 L2/L3 连续项紧凑 */
-function descriptionBlockVerticalSpacing(
-  level: DescriptionBlockLevel,
-  prevLevel: DescriptionBlockLevel | undefined,
-  index: number
-): string {
-  if (index === 0) {
-    return level === 1 ? "mt-0 mb-2" : "mt-0"
-  }
-  if (level === 1) return "mt-4 mb-2"
-  if (prevLevel === 1) return "mt-1"
-  return "mt-0.5"
 }
 
 const descriptionEditControlClass =
@@ -726,6 +693,9 @@ export function RequirementDrawer({
     return tableDataForRender.columns.filter((col) => col.tags.includes("all") || col.tags.includes(tableFilter))
   }, [tableDataForRender.columns, tableFilter])
 
+  /** 编辑态展示完整列顺序（含重排）；浏览态仍按标签筛选 */
+  const matrixColumns = isEditing ? editTableData.columns : visibleColumns
+
   const browseDescriptionBlocks = useMemo(
     () => parseContentToDescriptionBlocks(effectiveRequirement?.description ?? ""),
     [effectiveRequirement?.description]
@@ -737,13 +707,8 @@ export function RequirementDrawer({
     () => browseDescriptionBlocks.filter((b) => b.text.trim()),
     [browseDescriptionBlocks]
   )
-  const browseListMarkers = useMemo(
-    () => computeBrowseListMarkers(browseBlocksWithText),
-    [browseBlocksWithText]
-  )
-
-  const editOutlineLabels = useMemo(
-    () => computeOutlineLabels(editDescriptionBlocks),
+  const editListMarkers = useMemo(
+    () => computeBlockListMarkers(editDescriptionBlocks),
     [editDescriptionBlocks]
   )
 
@@ -771,6 +736,18 @@ export function RequirementDrawer({
 
   const addDescriptionBlock = () => {
     setEditDescriptionBlocks((prev) => [...prev, newDescriptionBlock(1)])
+  }
+
+  const moveDescriptionBlock = (index: number, delta: -1 | 1) => {
+    setEditDescriptionBlocks((prev) => {
+      const j = index + delta
+      if (j < 0 || j >= prev.length) return prev
+      const next = [...prev]
+      const tmp = next[index]
+      next[index] = next[j]
+      next[j] = tmp
+      return next
+    })
   }
 
   const handleTableCellEdit = (rowIndex: number, columnId: string, value: string) => {
@@ -835,6 +812,19 @@ export function RequirementDrawer({
       ...prev,
       columns: prev.columns.map((col) => (col.id === columnId ? { ...col, title } : col)),
     }))
+  }
+
+  const handleMoveColumn = (columnId: string, delta: -1 | 1) => {
+    setEditTableData((prev) => {
+      const idx = prev.columns.findIndex((c) => c.id === columnId)
+      if (idx < 0) return prev
+      const nextIdx = idx + delta
+      if (nextIdx < 0 || nextIdx >= prev.columns.length) return prev
+      const cols = [...prev.columns]
+      const [moved] = cols.splice(idx, 1)
+      cols.splice(nextIdx, 0, moved)
+      return { ...prev, columns: cols }
+    })
   }
 
   const startEditColumnTags = (column: DynamicColumn) => {
@@ -1000,52 +990,70 @@ export function RequirementDrawer({
                 {editDescriptionBlocks.map((block, index) => (
                   <div
                     key={block.id}
-                    className={cn(
-                      "flex items-start gap-2.5",
-                      descriptionIndentPl(block.level),
-                      descriptionBlockVerticalSpacing(
-                        block.level,
-                        editDescriptionBlocks[index - 1]?.level,
-                        index
-                      )
-                    )}
+                    className="flex items-start gap-2 bg-slate-50/50 border border-slate-100 rounded-md p-1.5 mb-2"
                   >
-                    {block.level === 1 ? (
-                      <span
-                        className={cn(descriptionLevelOneIndexClass(), "pt-2 select-none")}
-                        aria-hidden
-                      >
-                        {editOutlineLabels[index]}
-                      </span>
-                    ) : null}
-                    <div className="flex min-w-0 flex-1 items-start gap-2">
-                      <Select
-                        value={String(block.level)}
-                        onValueChange={(v) =>
-                          updateBlockLevel(index, Number(v) as DescriptionBlockLevel)
-                        }
-                      >
-                        <SelectTrigger
-                          className={cn(
-                            "h-9 w-[4.25rem] shrink-0 px-2 text-xs",
-                            descriptionEditControlClass
-                          )}
+                    <span
+                      className={cn(
+                        "w-7 shrink-0 select-none pt-2",
+                        editBlockGlyphClass(block.level)
+                      )}
+                      aria-hidden
+                    >
+                      {editListMarkers[index]}
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-slate-500 hover:bg-slate-200 rounded p-1 disabled:opacity-30"
+                          disabled={index === 0}
+                          onClick={() => moveDescriptionBlock(index, -1)}
+                          aria-label="上移"
                         >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">1 级</SelectItem>
-                          <SelectItem value="2">2 级</SelectItem>
-                          <SelectItem value="3">3 级</SelectItem>
-                        </SelectContent>
-                      </Select>
+                          <ChevronUp className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-slate-500 hover:bg-slate-200 rounded p-1 disabled:opacity-30"
+                          disabled={index === editDescriptionBlocks.length - 1}
+                          onClick={() => moveDescriptionBlock(index, 1)}
+                          aria-label="下移"
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </Button>
+                        <Select
+                          value={String(block.level)}
+                          onValueChange={(v) =>
+                            updateBlockLevel(index, Number(v) as DescriptionBlockLevel)
+                          }
+                        >
+                          <SelectTrigger
+                            className={cn(
+                              "h-9 w-[4.75rem] shrink-0 px-2 text-xs",
+                              descriptionEditControlClass
+                            )}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">1 级</SelectItem>
+                            <SelectItem value="2">2 级</SelectItem>
+                            <SelectItem value="3">3 级</SelectItem>
+                            <SelectItem value="4">4 级</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                       <Textarea
                         value={block.text}
                         onChange={(e) => updateBlockText(index, e.target.value)}
                         rows={Math.min(12, Math.max(2, block.text.split("\n").length + 1))}
                         placeholder="输入描述内容…"
                         className={cn(
-                          "min-h-11 flex-1 min-w-0 resize-y py-2",
+                          "min-h-11 w-full resize-y py-2",
                           descriptionBodyClass(block.level),
                           descriptionEditControlClass
                         )}
@@ -1075,35 +1083,77 @@ export function RequirementDrawer({
                 </Button>
               </div>
             ) : (
-              <div className="flex flex-col space-y-1.5">
-                {browseBlocksWithText.map((b, i) => (
-                  <div
-                    key={b.id}
-                    className={cn(
-                      "flex items-start gap-2",
-                      browseListRowIndent(b.level),
-                      b.level === 1 && i > 0 && "!mt-3"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "w-6 shrink-0 select-none pt-0.5",
-                        browseGlyphSpanClass(b.level)
-                      )}
-                      aria-hidden
-                    >
-                      {browseListMarkers[i]}
-                    </span>
-                    <div
-                      className={cn(
-                        "min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]",
-                        browseDescriptionBodyClass(b.level)
-                      )}
-                    >
-                      {b.text}
-                    </div>
-                  </div>
-                ))}
+              <div className="flex flex-col">
+                {(() => {
+                  let l2Counter = 0
+                  return browseBlocksWithText.map((b, index) => {
+                    const L = Math.min(4, Math.max(1, b.level)) as DescriptionBlockLevel
+                    const bodyClass =
+                      "min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere] leading-loose"
+                    if (L === 1) {
+                      l2Counter = 0
+                      return (
+                        <div
+                          key={b.id}
+                          className={cn(
+                            "mt-6 mb-3 text-lg font-semibold text-slate-900 tracking-tight leading-loose",
+                            index === 0 && "!mt-0"
+                          )}
+                        >
+                          {b.text ?? ""}
+                        </div>
+                      )
+                    }
+                    const cleanText = cleanViewListBodyText(b.text || "")
+                    if (L === 2) {
+                      l2Counter += 1
+                      return (
+                        <div
+                          key={b.id}
+                          className="mt-3 flex items-start gap-2 text-base leading-loose text-slate-800"
+                        >
+                          <span
+                            className="w-6 shrink-0 self-start select-none text-right tabular-nums text-base leading-loose text-slate-400 font-normal no-underline pt-[2px]"
+                            aria-hidden
+                          >
+                            {l2Counter}.
+                          </span>
+                          <div className={bodyClass}>{cleanText}</div>
+                        </div>
+                      )
+                    }
+                    if (L === 3) {
+                      return (
+                        <div
+                          key={b.id}
+                          className="mt-2 ml-7 flex items-start gap-2 text-sm leading-loose text-slate-600"
+                        >
+                          <span
+                            className="w-5 shrink-0 self-start select-none text-center text-sm leading-loose text-slate-400 font-normal pt-[2px]"
+                            aria-hidden
+                          >
+                            •
+                          </span>
+                          <div className={bodyClass}>{cleanText}</div>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div
+                        key={b.id}
+                        className="mt-2 ml-12 flex items-start gap-2 text-sm leading-loose text-slate-500"
+                      >
+                        <span
+                          className="w-5 shrink-0 self-start select-none text-center text-sm leading-loose text-slate-400 font-normal pt-[2px]"
+                          aria-hidden
+                        >
+                          ◦
+                        </span>
+                        <div className={bodyClass}>{cleanText}</div>
+                      </div>
+                    )
+                  })
+                })()}
               </div>
             )}
           </section>
@@ -1247,40 +1297,72 @@ export function RequirementDrawer({
               </div>
             )}
 
-            <div className="rounded-lg border border-slate-200 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200">
+            <div className="rounded-lg border border-slate-200 overflow-hidden flex flex-col min-h-0">
+              <div className="max-h-[min(60vh,600px)] overflow-auto min-h-0">
+                <table className="w-full text-xs border-collapse">
+                  <thead className="border-b border-slate-200">
                     <tr>
-                      {visibleColumns.map((col, colIndex) => {
+                      {matrixColumns.map((col, colIndex) => {
                         const minWidthClass =
                           col.title.trim().length <= 6 ? "min-w-[120px]" : "min-w-[150px]"
+                        const isFirstCol = colIndex === 0
+                        const isLastCol = colIndex === matrixColumns.length - 1
                         return (
                         <th
                           key={col.id}
                           className={cn(
                             "px-3 py-2 text-left font-medium text-slate-600 whitespace-normal break-words align-top",
-                            minWidthClass,
-                            colIndex === 0 &&
-                              "sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"
+                            "sticky top-0 bg-slate-50 shadow-sm",
+                            isFirstCol
+                              ? "left-0 z-30 border-r border-slate-200 shadow-[2px_2px_4px_-2px_rgba(0,0,0,0.06)]"
+                              : "z-20",
+                            minWidthClass
                           )}
                         >
                           <div className="space-y-1">
                             <div className="flex items-start justify-between gap-1">
-                              {isEditing ? (
-                                <Input
-                                  value={col.title}
-                                  onChange={(e) => handleColumnTitleChange(col.id, e.target.value)}
-                                  className="w-full min-w-[120px] h-7 text-xs px-2 bg-white border-slate-200"
-                                />
-                              ) : (
-                                <span className="pt-1">{col.title}</span>
-                              )}
+                              <div className="flex items-center gap-1 flex-1 min-w-0">
+                                {isEditing ? (
+                                  <>
+                                    <div className="flex items-center shrink-0">
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-5 w-5 text-slate-400 hover:text-slate-700 disabled:opacity-25"
+                                        disabled={isFirstCol}
+                                        onClick={() => handleMoveColumn(col.id, -1)}
+                                        title="左移"
+                                      >
+                                        <ChevronLeft className="w-3 h-3" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-5 w-5 text-slate-400 hover:text-slate-700 disabled:opacity-25"
+                                        disabled={isLastCol}
+                                        onClick={() => handleMoveColumn(col.id, 1)}
+                                        title="右移"
+                                      >
+                                        <ChevronRight className="w-3 h-3" />
+                                      </Button>
+                                    </div>
+                                    <Input
+                                      value={col.title}
+                                      onChange={(e) => handleColumnTitleChange(col.id, e.target.value)}
+                                      className="h-7 text-xs px-2 bg-white border-slate-200 flex-1 min-w-[72px]"
+                                    />
+                                  </>
+                                ) : (
+                                  <span className="pt-1">{col.title}</span>
+                                )}
+                              </div>
                               {isEditing && (
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-4 w-4 text-slate-300 hover:text-rose-400"
+                                  className="h-4 w-4 shrink-0 text-slate-300 hover:text-rose-400"
                                   onClick={() => handleDeleteTableColumn(col.id)}
                                 >
                                   <X className="w-2.5 h-2.5" />
@@ -1330,22 +1412,28 @@ export function RequirementDrawer({
                           </div>
                         </th>
                       )})}
-                      {isEditing && <th className="px-2 py-2 w-8" />}
+                      {isEditing && (
+                        <th className="sticky top-0 right-0 z-[25] w-10 px-2 py-2 bg-slate-50 shadow-sm border-l border-slate-200" />
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {tableDataForRender.rows.map((row, rowIndex) => (
-                      <tr key={row.id} className="hover:bg-slate-50/50 transition-colors">
-                        {visibleColumns.map((col, colIndex) => {
+                      <tr
+                        key={row.id}
+                        className="group/row hover:bg-slate-50/50 transition-colors"
+                      >
+                        {matrixColumns.map((col, colIndex) => {
                           const cellValue = String(row[col.id] ?? "")
                           const minWidthClass = cellValue.trim().length <= 10 ? "min-w-[120px]" : "min-w-[150px]"
                           return (
                           <td
                             key={`${row.id}-${col.id}`}
                             className={cn(
-                              "px-2 py-1.5 align-top whitespace-normal break-words",
+                              "px-2 py-1.5 align-top whitespace-normal break-words bg-white",
                               minWidthClass,
-                              colIndex === 0 && "sticky left-0 bg-white z-10"
+                              colIndex === 0 &&
+                                "sticky left-0 z-10 border-r border-slate-200 group-hover/row:bg-slate-50/50"
                             )}
                           >
                             {isEditing ? (
@@ -1385,7 +1473,7 @@ export function RequirementDrawer({
                           </td>
                         )})}
                         {isEditing && (
-                          <td className="px-1 py-1">
+                          <td className="sticky right-0 z-[15] px-1 py-1 bg-white border-l border-slate-100 group-hover/row:bg-slate-50/50">
                             <Button
                               variant="ghost"
                               size="icon"
