@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { supabase } from "@/lib/supabase"
+import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
 
 const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -368,6 +369,18 @@ export default function Home() {
   }, [fetchAllData, requirements, selectedProjectId, supportsProjectId])
 
   const persistTestCases = useCallback(async (requirementId: string, nextCases: TestCase[]) => {
+    const scope = "persistTestCases"
+    if (!requirementId?.trim()) {
+      const msg = `${scope}: missing requirement_id`
+      console.error("Supabase Error:", JSON.stringify({ message: msg }, null, 2))
+      throw new Error(msg)
+    }
+    if (!isUuid(requirementId)) {
+      const msg = `${scope}: requirement_id must be a valid UUID (FK to requirements). Got: ${requirementId}`
+      console.error("Supabase Error:", JSON.stringify({ message: msg }, null, 2))
+      throw new Error(msg)
+    }
+
     try {
       const current = requirements.find(r => r.id === requirementId)?.testCases ?? []
       const currentIds = new Set(current.map(tc => tc.id).filter(isUuid))
@@ -375,31 +388,60 @@ export default function Home() {
       const deleted = Array.from(currentIds).filter(id => !nextIds.has(id))
       if (deleted.length > 0) {
         const { error } = await supabase.from("test_cases").delete().in("id", deleted)
-        if (error) throw error
+        if (error) {
+          console.error("Supabase Error:", stringifyErrorForLog(error))
+          throw new Error(`${scope} delete: ${supabaseErrorMessage(error)}`)
+        }
       }
 
-      for (const tc of nextCases) {
-        const payload = {
+      // 已有行：仅 UUID 参与 upsert，且 payload 必须含 requirement_id；绝不写入临时假 id
+      const existingRows = nextCases
+        .filter((tc) => isUuid(tc.id))
+        .map((tc) => ({
+          id: tc.id,
           requirement_id: requirementId,
-          case_no: tc.number,
-          title: tc.title,
-          preconditions: tc.precondition,
-          steps: tc.steps,
-          expected_result: tc.expected,
-          is_checked: tc.checked,
-        }
-        if (isUuid(tc.id)) {
-          const { error } = await supabase.from("test_cases").update(payload).eq("id", tc.id)
-          if (error) throw error
-        } else {
-          const { error } = await supabase.from("test_cases").insert(payload)
-          if (error) throw error
+          case_no: tc.number ?? "",
+          title: tc.title ?? "",
+          preconditions: tc.precondition ?? "",
+          steps: tc.steps ?? "",
+          expected_result: tc.expected ?? "",
+          is_checked: Boolean(tc.checked),
+        }))
+      if (existingRows.length > 0) {
+        const { error } = await supabase
+          .from("test_cases")
+          .upsert(existingRows, { onConflict: "id" })
+        if (error) {
+          console.error("Supabase Error:", stringifyErrorForLog(error))
+          throw new Error(`${scope} upsert: ${supabaseErrorMessage(error)}`)
         }
       }
+
+      // 新建行：不传 id，由数据库生成 UUID（禁止把 temp-xxx 等假 id 提交给 PostgREST）
+      const newRows = nextCases
+        .filter((tc) => !isUuid(tc.id))
+        .map((tc) => ({
+          requirement_id: requirementId,
+          case_no: tc.number ?? "",
+          title: tc.title ?? "",
+          preconditions: tc.precondition ?? "",
+          steps: tc.steps ?? "",
+          expected_result: tc.expected ?? "",
+          is_checked: Boolean(tc.checked),
+        }))
+      if (newRows.length > 0) {
+        const { error } = await supabase.from("test_cases").insert(newRows)
+        if (error) {
+          console.error("Supabase Error:", stringifyErrorForLog(error))
+          throw new Error(`${scope} insert: ${supabaseErrorMessage(error)}`)
+        }
+      }
+
       console.log("Save Success", { scope: "test_cases", requirementId, count: nextCases.length })
     } catch (error) {
-      console.error("persistTestCases failed:", error instanceof Error ? error.message : String(error))
-      throw error
+      console.error("Supabase Error:", stringifyErrorForLog(error))
+      if (error instanceof Error) throw error
+      throw new Error(`${scope}: ${supabaseErrorMessage(error)}`)
     }
   }, [requirements])
 
@@ -409,9 +451,13 @@ export default function Home() {
       const currentIds = new Set(current.map(item => item.id).filter(isUuid))
       const nextIds = new Set(nextIterations.map(item => item.id).filter(isUuid))
       const deleted = Array.from(currentIds).filter(id => !nextIds.has(id))
+      const itScope = "persistIterations"
       if (deleted.length > 0) {
         const { error } = await supabase.from("iterations").delete().in("id", deleted)
-        if (error) throw error
+        if (error) {
+          console.error("Supabase Error:", stringifyErrorForLog(error))
+          throw new Error(`${itScope} delete: ${supabaseErrorMessage(error)}`)
+        }
       }
 
       const now = new Date().toISOString()
@@ -428,7 +474,10 @@ export default function Home() {
         const { error } = await supabase
           .from("iterations")
           .upsert(existingPayloads, { onConflict: "id" })
-        if (error) throw error
+        if (error) {
+          console.error("Supabase Error:", stringifyErrorForLog(error))
+          throw new Error(`${itScope} upsert: ${supabaseErrorMessage(error)}`)
+        }
       }
 
       const newPayloads = nextIterations
@@ -441,12 +490,16 @@ export default function Home() {
         }))
       if (newPayloads.length > 0) {
         const { error } = await supabase.from("iterations").insert(newPayloads)
-        if (error) throw error
+        if (error) {
+          console.error("Supabase Error:", stringifyErrorForLog(error))
+          throw new Error(`${itScope} insert: ${supabaseErrorMessage(error)}`)
+        }
       }
       console.log("Save Success", { scope: "iterations", requirementId, count: nextIterations.length })
     } catch (error) {
-      console.error("persistIterations failed:", error instanceof Error ? error.message : String(error))
-      throw error
+      console.error("Supabase Error:", stringifyErrorForLog(error))
+      if (error instanceof Error) throw error
+      throw new Error(`persistIterations: ${supabaseErrorMessage(error)}`)
     }
   }, [requirements])
 

@@ -39,7 +39,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { cn } from "@/lib/utils"
+import { cn, uniqueClientId } from "@/lib/utils"
 import { History, ChevronRight, Pencil, X, Plus, Trash2, Save, Columns3, ClipboardPaste, Check } from "lucide-react"
 import { TestCase } from "@/components/test-execution-dialog"
 import { IterationRecord } from "@/components/iteration-history-dialog"
@@ -90,10 +90,7 @@ export interface DescriptionBlock {
 }
 
 export function newDescriptionBlockId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `blk-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return uniqueClientId("blk")
 }
 
 export function newDescriptionBlock(level: DescriptionBlockLevel = 1): DescriptionBlock {
@@ -276,11 +273,11 @@ function emptyTableData(): MatrixTableData {
 }
 
 function createTableColumnId(): string {
-  return `col_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`
+  return uniqueClientId("col")
 }
 
 function createTableRowId(): string {
-  return `row_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`
+  return uniqueClientId("row")
 }
 
 function normalizeTags(tags: string[]): string[] {

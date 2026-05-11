@@ -1,17 +1,20 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import {
   Sheet,
   SheetContent,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { cn } from "@/lib/utils"
+import { cn, uniqueClientId } from "@/lib/utils"
 import { GitCommit, Loader2, Plus, Pencil, Trash2, X, Save } from "lucide-react"
+import { toast } from "sonner"
+import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
 
 export interface IterationRecord {
   id: string
@@ -22,14 +25,16 @@ export interface IterationRecord {
 interface IterationHistoryDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  requirementId: string
   title: string
   iterations: IterationRecord[]
-  onCommitIterations?: (iterations: IterationRecord[]) => Promise<void> | void
+  onCommitIterations?: (requirementId: string, iterations: IterationRecord[]) => Promise<void> | void
 }
 
 export function IterationHistoryDialog({
   open,
   onOpenChange,
+  requirementId,
   title,
   iterations,
   onCommitIterations,
@@ -84,7 +89,7 @@ export function IterationHistoryDialog({
   const handleAddNew = () => {
     if (!addForm.version.trim()) return
     const newRecord: IterationRecord = {
-      id: `tmp-iter-${Date.now()}`,
+      id: uniqueClientId("tmp-iter"),
       version: addForm.version.trim(),
       changes: addForm.changes || "无详细变更内容",
     }
@@ -104,34 +109,84 @@ export function IterationHistoryDialog({
     return () => window.removeEventListener("beforeunload", onBeforeUnload)
   }, [open, hasUnsavedChanges])
 
-  const handleSheetOpenChange = async (nextOpen: boolean) => {
-    if (nextOpen) {
-      onOpenChange(true)
+  const localIterationsRef = useRef(localIterations)
+  const initialSnapshotRef = useRef(initialSnapshot)
+  useEffect(() => {
+    localIterationsRef.current = localIterations
+    initialSnapshotRef.current = initialSnapshot
+  }, [localIterations, initialSnapshot])
+
+  const performDismiss = useCallback(() => {
+    const rid = requirementId
+    const rowsCopy = localIterationsRef.current.map((r) => ({ ...r }))
+    const dirty = snapshot(rowsCopy) !== initialSnapshotRef.current
+
+    if (dirty) {
+      const ok = window.confirm(
+        "有未保存的更改。确定关闭？将尝试在后台自动保存；若失败会弹出提示，您可稍后重新打开再试。"
+      )
+      if (!ok) return
+    }
+
+    onOpenChange(false)
+
+    if (dirty && rid && onCommitIterations) {
+      void Promise.resolve(onCommitIterations(rid, rowsCopy)).catch((err: unknown) => {
+        console.error("Iteration history background save failed:", stringifyErrorForLog(err))
+        toast.error("保存失败", {
+          description: supabaseErrorMessage(err),
+        })
+      })
+    }
+  }, [requirementId, onOpenChange, onCommitIterations])
+
+  const handleSheetOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        onOpenChange(true)
+        return
+      }
+      performDismiss()
+    },
+    [onOpenChange, performDismiss]
+  )
+
+  const handleSaveAndClose = useCallback(async () => {
+    if (!requirementId) {
+      toast.error("无法保存", { description: "缺少需求 ID" })
+      onOpenChange(false)
       return
     }
-    if (isSavingOnClose) return
-    try {
-      if (hasUnsavedChanges) {
-        setIsSavingOnClose(true)
-        await onCommitIterations?.(localIterations)
-        setInitialSnapshot(snapshot(localIterations))
-      }
+    if (!hasUnsavedChanges) {
       onOpenChange(false)
-    } catch (error) {
-      console.error("Failed to persist iterations on close:", error instanceof Error ? error.message : String(error))
       return
+    }
+    if (!onCommitIterations) {
+      onOpenChange(false)
+      return
+    }
+    setIsSavingOnClose(true)
+    try {
+      await onCommitIterations(requirementId, localIterations)
+      setInitialSnapshot(snapshot(localIterations))
+      onOpenChange(false)
+    } catch (err: unknown) {
+      console.error("Iteration history save failed:", stringifyErrorForLog(err))
+      toast.error("保存失败", {
+        description: supabaseErrorMessage(err),
+      })
     } finally {
       setIsSavingOnClose(false)
     }
-  }
+  }, [requirementId, hasUnsavedChanges, localIterations, onCommitIterations, onOpenChange])
 
   return (
     <Sheet open={open} onOpenChange={handleSheetOpenChange}>
       <SheetContent
         side="right"
-        className={cn("w-[95vw] sm:max-w-4xl p-0 overflow-hidden", isSavingOnClose && "pointer-events-none")}
+        className={cn("w-[95vw] sm:max-w-4xl p-0 overflow-hidden flex flex-col", isSavingOnClose && "opacity-90")}
       >
-        <SheetHeader className="pb-4 border-b border-slate-100">
+        <SheetHeader className="pb-4 border-b border-slate-100 shrink-0">
           <SheetTitle className="sr-only">{title || "迭代历史"}</SheetTitle>
           <div className="flex items-center justify-between text-slate-800 px-4 pt-4">
             <div className="flex items-center gap-2.5">
@@ -216,7 +271,7 @@ export function IterationHistoryDialog({
         )}
         
         {/* Timeline */}
-        <div className="h-[calc(100vh-8.5rem)] overflow-y-auto pr-2 -mr-2 mt-4 px-4">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-2 -mr-2 mt-4 px-4">
           <div className="relative pl-10 pb-2 pr-2">
             {/* Timeline line - thinner, lighter */}
             <div className="absolute left-[11px] top-4 bottom-4 w-[1px] bg-gradient-to-b from-sky-300 via-slate-200 to-slate-100" />
@@ -360,6 +415,28 @@ export function IterationHistoryDialog({
             )}
           </div>
         </div>
+
+        <SheetFooter className="border-t border-slate-100 bg-white shrink-0 flex flex-row flex-wrap items-center justify-end gap-2 px-4 py-3 mt-auto">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={performDismiss}
+          >
+            关闭
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-9 gap-1.5 bg-slate-900 hover:bg-slate-800 text-white"
+            disabled={isSavingOnClose || !hasUnsavedChanges || !onCommitIterations}
+            onClick={() => void handleSaveAndClose()}
+          >
+            {isSavingOnClose ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            保存并关闭
+          </Button>
+        </SheetFooter>
       </SheetContent>
     </Sheet>
   )

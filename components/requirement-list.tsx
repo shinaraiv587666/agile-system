@@ -10,6 +10,7 @@ import {
 } from "@/components/requirement-drawer"
 import { TestExecutionDialog, TestCase } from "@/components/test-execution-dialog"
 import { IterationHistoryDialog, IterationRecord } from "@/components/iteration-history-dialog"
+import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
 
 interface RequirementListProps {
   projectId: string
@@ -116,12 +117,19 @@ export function RequirementList({
     setIterationSheetOpen(true)
   }, [])
 
-  const handleCommitTestCases = useCallback(async (testCases: TestCase[]) => {
-    if (!testingRequirement) return
-    // 先写库，再强制刷新主列表，确保下次打开抽屉拿到服务端数据（含新 insert 的 UUID）
-    await onPersistTestCases(testingRequirement.id, testCases)
-    await onRefreshRequirements()
-  }, [testingRequirement, onPersistTestCases, onRefreshRequirements])
+  const handleCommitTestCases = useCallback(
+    async (requirementId: string, testCases: TestCase[]) => {
+      if (!requirementId) return
+      try {
+        await onPersistTestCases(requirementId, testCases)
+        await onRefreshRequirements()
+      } catch (err: unknown) {
+        console.error("handleCommitTestCases Supabase Error:", stringifyErrorForLog(err))
+        throw err instanceof Error ? err : new Error(supabaseErrorMessage(err))
+      }
+    },
+    [onPersistTestCases, onRefreshRequirements]
+  )
 
   const handleAllComplete = useCallback((allComplete: boolean) => {
     if (!testingRequirement) return
@@ -216,8 +224,13 @@ export function RequirementList({
   }, [activeCategory, projectCategories])
 
   const handleCommitIterations = useCallback(async (requirementId: string, iterations: IterationRecord[]) => {
-    await onPersistIterations(requirementId, iterations)
-    await onRefreshRequirements()
+    try {
+      await onPersistIterations(requirementId, iterations)
+      await onRefreshRequirements()
+    } catch (err: unknown) {
+      console.error("handleCommitIterations Supabase Error:", stringifyErrorForLog(err))
+      throw err instanceof Error ? err : new Error(supabaseErrorMessage(err))
+    }
   }, [onPersistIterations, onRefreshRequirements])
 
   return (
@@ -312,12 +325,10 @@ export function RequirementList({
             setIterationRequirement(null)
           }
         }}
+        requirementId={iterationRequirement?.id ?? ""}
         title={iterationRequirement?.title ?? "迭代历史"}
         iterations={iterationRequirement?.iterationHistory ?? []}
-        onCommitIterations={async (iterations) => {
-          if (!iterationRequirement) return
-          await handleCommitIterations(iterationRequirement.id, iterations)
-        }}
+        onCommitIterations={handleCommitIterations}
       />
     </div>
   )

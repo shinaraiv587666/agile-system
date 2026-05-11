@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo, type ClipboardEvent as ReactClipboardEvent } from "react"
+import { useState, useEffect, useRef, useMemo, useCallback, type ClipboardEvent as ReactClipboardEvent } from "react"
 import {
   Sheet,
   SheetContent,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
   SheetDescription,
@@ -19,7 +20,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { cn } from "@/lib/utils"
+import { cn, uniqueClientId } from "@/lib/utils"
 import { 
   FlaskConical, 
   CheckCircle2, 
@@ -33,6 +34,8 @@ import {
   ListChecks,
   ClipboardPaste
 } from "lucide-react"
+import { toast } from "sonner"
+import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
 
 // 5-field test case structure
 export interface TestCase {
@@ -51,7 +54,7 @@ interface TestExecutionDialogProps {
   requirementId: string
   requirementTitle: string
   testCases: TestCase[]
-  onCommitTestCases: (testCases: TestCase[]) => Promise<void> | void
+  onCommitTestCases: (requirementId: string, testCases: TestCase[]) => Promise<void> | void
   onAllComplete: (allComplete: boolean) => void
 }
 
@@ -102,6 +105,75 @@ function parseTsvToMatrix(raw: string): string[][] {
     rows.pop()
   }
   return rows
+}
+
+/** TC-01 … TC-99，之后 TC-100（与 DB case_no 唯一约束配合） */
+function padTcSequential(n: number): string {
+  if (n <= 99) return `TC-${String(n).padStart(2, "0")}`
+  return `TC-${n}`
+}
+
+function usedCaseNoSet(cases: TestCase[]): Set<string> {
+  return new Set(cases.map((c) => String(c.number ?? "").trim()).filter(Boolean))
+}
+
+/** 在已有用例中分配下一个未占用的 TC-xx（用于新增 / 粘贴补全编号） */
+function allocateNextCaseNo(existing: TestCase[]): string {
+  const used = usedCaseNoSet(existing)
+  let k = 1
+  while (k < 100_000) {
+    const label = padTcSequential(k)
+    if (!used.has(label)) return label
+    k++
+  }
+  return `TC-${uniqueClientId("fallback")}`
+}
+
+/**
+ * 保存前自检：空编号、重复编号改为唯一值（空 → TC-01 递增；与已占用冲突 → base-1、base-2 …）
+ */
+function dedupeCaseNumbersForPersist(cases: TestCase[]): TestCase[] {
+  const used = new Set<string>()
+  const out: TestCase[] = []
+  for (const tc of cases) {
+    let n = String(tc.number ?? "").trim()
+    if (!n) {
+      let k = 1
+      while (used.has(padTcSequential(k))) k++
+      n = padTcSequential(k)
+      used.add(n)
+      out.push({ ...tc, number: n })
+      continue
+    }
+    if (used.has(n)) {
+      let s = 1
+      let candidate = `${n}-${s}`
+      while (used.has(candidate)) {
+        s++
+        candidate = `${n}-${s}`
+      }
+      n = candidate
+    }
+    used.add(n)
+    out.push({ ...tc, number: n })
+  }
+  return out
+}
+
+function friendlyTestCaseSaveError(err: unknown): string {
+  const msg = supabaseErrorMessage(err)
+  const blob = stringifyErrorForLog(err)
+  if (
+    msg.includes("23505") ||
+    blob.includes("23505") ||
+    /duplicate key/i.test(msg) ||
+    /unique constraint/i.test(msg) ||
+    msg.includes("case_no") ||
+    msg.includes("test_cases_requirement_id_case_no_key")
+  ) {
+    return "测试用例的编号 (case_no) 存在重复或与服务器冲突，请检查或让系统自动重新编号后再试。"
+  }
+  return msg
 }
 
 export function TestExecutionDialog({
@@ -222,9 +294,10 @@ export function TestExecutionDialog({
 
   const handleAddNew = () => {
     if (!addForm.title.trim()) return
+    const trimmedNo = addForm.number.trim()
     const newCase: TestCase = {
-      id: `${requirementId}-tc-new-${Date.now()}`,
-      number: addForm.number || `TC-${String(localCases.length + 1).padStart(3, "0")}`,
+      id: uniqueClientId(`tc-${requirementId}-new`),
+      number: trimmedNo || allocateNextCaseNo(localCases),
       title: addForm.title,
       precondition: addForm.precondition,
       steps: addForm.steps,
@@ -243,15 +316,36 @@ export function TestExecutionDialog({
       .filter((cols) => cols.some((cell) => cell.trim().length > 0))
     if (rows.length === 0) return
 
-    const appended: TestCase[] = rows.map((cols, idx) => ({
-      id: `${requirementId}-tc-bulk-${Date.now()}-${idx}`,
-      number: cols[0] ?? "",
-      title: cols[1] ?? "",
-      precondition: cols[2] ?? "",
-      steps: cols[3] ?? "",
-      expected: cols[4] ?? "",
-      checked: false,
-    }))
+    const used = usedCaseNoSet(localCases)
+    const appended: TestCase[] = rows.map((cols, idx) => {
+      let number = (cols[0] ?? "").trim()
+      if (!number) {
+        let k = 1
+        while (used.has(padTcSequential(k))) k++
+        number = padTcSequential(k)
+        used.add(number)
+      } else {
+        if (used.has(number)) {
+          let s = 1
+          let candidate = `${number}-${s}`
+          while (used.has(candidate)) {
+            s++
+            candidate = `${number}-${s}`
+          }
+          number = candidate
+        }
+        used.add(number)
+      }
+      return {
+        id: uniqueClientId(`tc-${requirementId}-bulk-${idx}`),
+        number,
+        title: cols[1] ?? "",
+        precondition: cols[2] ?? "",
+        steps: cols[3] ?? "",
+        expected: cols[4] ?? "",
+        checked: false,
+      }
+    })
 
     const updated = [...localCases, ...appended]
     setLocalCases(updated)
@@ -279,35 +373,85 @@ export function TestExecutionDialog({
     return () => window.removeEventListener("beforeunload", onBeforeUnload)
   }, [open, hasUnsavedChanges])
 
-  const handleDialogOpenChange = async (nextOpen: boolean) => {
-    if (nextOpen) {
-      onOpenChange(true)
+  const localCasesRef = useRef(localCases)
+  const initialSnapshotRef = useRef(initialSnapshot)
+  useEffect(() => {
+    localCasesRef.current = localCases
+    initialSnapshotRef.current = initialSnapshot
+  }, [localCases, initialSnapshot])
+
+  /** 遮罩 / X /「关闭」：同步通知父级关抽屉，避免 Radix 受控模式下异步关窗死锁；有改动时在确认后后台保存 */
+  const performDismiss = useCallback(() => {
+    const rid = requirementId
+    const casesCopy = localCasesRef.current.map((tc) => ({ ...tc }))
+    const dirty = snapshotCases(casesCopy) !== initialSnapshotRef.current
+
+    if (dirty) {
+      const ok = window.confirm(
+        "有未保存的更改。确定关闭？将尝试在后台自动保存；若失败会弹出提示，您可稍后重新打开再试。"
+      )
+      if (!ok) return
+    }
+
+    onOpenChange(false)
+
+    if (dirty && rid) {
+      const toSave = dedupeCaseNumbersForPersist(casesCopy)
+      void Promise.resolve(onCommitTestCases(rid, toSave)).catch((err: unknown) => {
+        console.error("Test cases background save failed:", stringifyErrorForLog(err))
+        toast.error("保存失败", {
+          description: friendlyTestCaseSaveError(err),
+        })
+      })
+    }
+  }, [requirementId, onOpenChange, onCommitTestCases])
+
+  const handleSheetOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        onOpenChange(true)
+        return
+      }
+      performDismiss()
+    },
+    [onOpenChange, performDismiss]
+  )
+
+  /** 明确「保存并关闭」：等待写库与刷新成功后再关；失败则 Toast 并保持打开 */
+  const handleSaveAndClose = useCallback(async () => {
+    if (!requirementId) {
+      toast.error("无法保存", { description: "缺少需求 ID" })
+      onOpenChange(false)
       return
     }
-    if (isSavingOnClose) return
-    try {
-      if (hasUnsavedChanges) {
-        setIsSavingOnClose(true)
-        await onCommitTestCases(localCases)
-        setInitialSnapshot(snapshotCases(localCases))
-      }
+    if (!hasUnsavedChanges) {
       onOpenChange(false)
-    } catch (error) {
-      console.error("Failed to persist test cases on close:", error instanceof Error ? error.message : String(error))
-      // Keep drawer open on save failure to avoid silent data loss
       return
+    }
+    setIsSavingOnClose(true)
+    try {
+      const normalized = dedupeCaseNumbersForPersist(localCases)
+      setLocalCases(normalized)
+      await onCommitTestCases(requirementId, normalized)
+      setInitialSnapshot(snapshotCases(normalized))
+      onOpenChange(false)
+    } catch (err: unknown) {
+      console.error("Test cases save failed:", stringifyErrorForLog(err))
+      toast.error("保存失败", {
+        description: friendlyTestCaseSaveError(err),
+      })
     } finally {
       setIsSavingOnClose(false)
     }
-  }
+  }, [requirementId, hasUnsavedChanges, localCases, onCommitTestCases, onOpenChange])
 
   return (
-    <Sheet open={open} onOpenChange={handleDialogOpenChange}>
+    <Sheet open={open} onOpenChange={handleSheetOpenChange}>
       <SheetContent
         side="right"
         className={cn(
           "w-[95vw] sm:max-w-4xl overflow-hidden flex flex-col p-0",
-          isSavingOnClose && "pointer-events-none"
+          isSavingOnClose && "opacity-90"
         )}
       >
         {/* Header */}
@@ -719,6 +863,28 @@ export function TestExecutionDialog({
             </div>
           </div>
         )}
+
+        <SheetFooter className="border-t border-slate-100 bg-white shrink-0 flex flex-row flex-wrap items-center justify-end gap-2 px-6 py-4 mt-auto">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={performDismiss}
+          >
+            关闭
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-9 gap-1.5 bg-slate-900 hover:bg-slate-800 text-white"
+            disabled={isSavingOnClose || !hasUnsavedChanges}
+            onClick={() => void handleSaveAndClose()}
+          >
+            {isSavingOnClose ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            保存并关闭
+          </Button>
+        </SheetFooter>
       </SheetContent>
     </Sheet>
   )
