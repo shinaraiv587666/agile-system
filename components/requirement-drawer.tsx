@@ -272,6 +272,17 @@ function emptyTableData(): MatrixTableData {
   return { columns: [], rows: [] }
 }
 
+/** 行内除 id 外，所有数据列均为空/空白 → 视为无实质内容（保存前剔除脏空行） */
+function rowHasNoSubstantiveContent(row: DynamicRow, columnIds: string[]): boolean {
+  return columnIds.every((id) => String(row[id] ?? "").trim() === "")
+}
+
+export function stripEmptyRowsFromTableData(data: MatrixTableData): MatrixTableData {
+  const columnIds = data.columns.map((c) => c.id)
+  const rows = data.rows.filter((row) => !rowHasNoSubstantiveContent(row, columnIds))
+  return { columns: data.columns, rows }
+}
+
 function createTableColumnId(): string {
   return uniqueClientId("col")
 }
@@ -349,13 +360,31 @@ function parseTsvToMatrix(raw: string): string[][] {
   return rows
 }
 
+/**
+ * 剪贴板矩阵净水：剔除「全格空白」的无效行；各行去掉尾部仅含空白/空串的单元格，
+ * 避免 Excel 多框选空列导致幽灵表头列，且不改变行内靠前单元格与列索引对齐。
+ */
+function cleanPastedTsvMatrix(matrix: string[][]): string[][] {
+  return matrix
+    .map((row) => row.map((cell) => String(cell ?? "")))
+    .map((cells) => {
+      let end = cells.length
+      while (end > 0 && cells[end - 1].trim() === "") {
+        end--
+      }
+      return cells.slice(0, end)
+    })
+    .filter((cells) => cells.length > 0 && !cells.every((cell) => cell.trim() === ""))
+}
+
 /** 粘贴区：保留浏览器默认粘贴行为；解析在确认导入时用 parseTsvToMatrix */
 function handleImportAreaPaste(_e: ReactClipboardEvent<HTMLTextAreaElement>) {
   // 不 preventDefault：让含引号内换行的 TSV 原样进入 textarea
 }
 
+/** 覆盖导入：第一行作为表头，其余为数据行 */
 function parseClipboardTextToTableData(raw: string): MatrixTableData | null {
-  const matrix = parseTsvToMatrix(raw).filter((r) => r.some((cell) => String(cell).trim().length > 0))
+  const matrix = cleanPastedTsvMatrix(parseTsvToMatrix(raw))
   if (matrix.length === 0) return null
 
   const width = Math.max(...matrix.map((r) => r.length))
@@ -381,13 +410,127 @@ function parseClipboardTextToTableData(raw: string): MatrixTableData | null {
   return { columns, rows }
 }
 
-function TableMatrixCell({
-  value,
-  onChange,
+/**
+ * 追加导入（基于表头名称的智能映射 + 按行索引合并）：
+ * - parsedRows[0]：传入表头；parsedRows[1..]：数据行，第 k 行对应表格第 k 行（0-based）：若 rows[k] 已存在则就地更新映射列，否则在末尾新建行。
+ * - 表头名与现有列 title（trim 完全匹配）→ 写入该列 id；同一粘贴块内同一列 id 仅用一次，重复表头名则新建列。
+ * - 无匹配则在 columns 末尾新建列；并为所有已有行补齐新列 key（空串），再写入粘贴值。
+ */
+function mergeTableDataForAppendByHeader(existing: MatrixTableData, parsedRows: string[][]): MatrixTableData {
+  const matrix = parsedRows.map((r) => r.map((c) => String(c ?? "")))
+  if (matrix.length === 0) return existing
+
+  const headerRow = matrix[0]
+  const dataRows = matrix.slice(1)
+
+  let columns: DynamicColumn[] = existing.columns.map((col) => ({
+    ...col,
+    tags: normalizeTags(col.tags),
+  }))
+
+  /** 表头名 -> 当前表中的代表列（用于「是否已有该名列」判断） */
+  const titleToRepresentativeCol = new Map<string, DynamicColumn>()
+  for (const col of columns) {
+    const key = col.title.trim()
+    if (!titleToRepresentativeCol.has(key)) {
+      titleToRepresentativeCol.set(key, col)
+    }
+  }
+
+  const usedTitles = new Set(columns.map((c) => c.title.trim()))
+
+  function allocateUniqueColumnTitle(raw: string, colIndex: number): string {
+    const base = raw.trim() ? raw.trim() : `未命名列_${colIndex + 1}`
+    if (!usedTitles.has(base)) {
+      usedTitles.add(base)
+      return base
+    }
+    let i = 2
+    let candidate = `${base} (${i})`
+    while (usedTitles.has(candidate)) {
+      i++
+      candidate = `${base} (${i})`
+    }
+    usedTitles.add(candidate)
+    return candidate
+  }
+
+  const width = headerRow.length
+  const incomingIndexToTargetId: string[] = new Array(width)
+  /** 本块粘贴中已为某一「粘贴列索引」分配过的目标列 id，避免重复表头都挤到同一列 */
+  const targetIdUsedInThisMapping = new Set<string>()
+
+  for (let j = 0; j < width; j++) {
+    const lookupName = (headerRow[j] ?? "").trim()
+    let matched = lookupName ? titleToRepresentativeCol.get(lookupName) : undefined
+    if (matched && targetIdUsedInThisMapping.has(matched.id)) {
+      matched = undefined
+    }
+
+    if (matched) {
+      incomingIndexToTargetId[j] = matched.id
+      targetIdUsedInThisMapping.add(matched.id)
+      continue
+    }
+
+    const title = allocateUniqueColumnTitle(lookupName, j)
+    const newCol: DynamicColumn = {
+      id: createTableColumnId(),
+      title,
+      tags: normalizeTags(inferColumnTagsFromHeader(title)),
+    }
+    columns.push(newCol)
+    incomingIndexToTargetId[j] = newCol.id
+    targetIdUsedInThisMapping.add(newCol.id)
+  }
+
+  const normalizeRowToAllColumns = (row: DynamicRow): DynamicRow => {
+    const next: DynamicRow = { id: row.id }
+    for (const col of columns) {
+      next[col.id] = row[col.id] ?? ""
+    }
+    return next
+  }
+
+  const nextRows: DynamicRow[] = existing.rows.map(normalizeRowToAllColumns)
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const values = dataRows[i]
+    if (i < nextRows.length) {
+      const prev = nextRows[i]
+      const merged: DynamicRow = { ...prev }
+      for (let j = 0; j < width; j++) {
+        const targetId = incomingIndexToTargetId[j]
+        if (!targetId) continue
+        merged[targetId] = values[j] ?? ""
+      }
+      nextRows[i] = merged
+    } else {
+      const row: DynamicRow = { id: createTableRowId() }
+      for (const col of columns) {
+        row[col.id] = ""
+      }
+      for (let j = 0; j < width; j++) {
+        const targetId = incomingIndexToTargetId[j]
+        if (!targetId) continue
+        row[targetId] = values[j] ?? ""
+      }
+      nextRows.push(row)
+    }
+  }
+
+  return { columns, rows: nextRows }
+}
+
+/** 单格编辑：本地 draft，失焦一次性提交，避免千格受控输入导致整表重绘卡顿 */
+function TableMatrixCellEditor({
+  initialValue,
+  onCommit,
 }: {
-  value: string
-  onChange: (next: string) => void
+  initialValue: string
+  onCommit: (value: string) => void
 }) {
+  const [draft, setDraft] = useState(initialValue)
   const ref = useRef<HTMLTextAreaElement | null>(null)
   const adjust = useCallback(() => {
     const el = ref.current
@@ -398,72 +541,32 @@ function TableMatrixCell({
 
   useLayoutEffect(() => {
     adjust()
-  }, [value, adjust])
+  }, [adjust])
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    const len = el.value.length
+    el.setSelectionRange(len, len)
+  }, [])
 
   return (
     <textarea
       ref={ref}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
       onInput={adjust}
+      onBlur={() => onCommit(draft)}
       spellCheck={false}
       className={cn(
         "w-full min-w-[120px] min-h-[60px] resize-y rounded-sm",
         "border-0 bg-transparent px-2 py-1.5 text-xs leading-relaxed text-slate-800",
-        "shadow-none outline-none ring-0 transition-[height]",
-        "focus-visible:ring-1 focus-visible:ring-slate-200/70"
+        "shadow-none outline-none ring-2 ring-sky-200/80 ring-offset-0 transition-[height]",
+        "focus-visible:ring-2 focus-visible:ring-sky-300/90"
       )}
     />
   )
-}
-
-function mergeTableDataForImport(existing: MatrixTableData, incoming: MatrixTableData, append: boolean): MatrixTableData {
-  if (!append) return incoming
-
-  const mergedColumns: DynamicColumn[] = existing.columns.map((col) => ({ ...col, tags: normalizeTags(col.tags) }))
-  const titleToId = new Map<string, string>(mergedColumns.map((col) => [col.title.trim(), col.id]))
-  const incomingToTargetId = new Map<string, string>()
-
-  for (const col of incoming.columns) {
-    const key = col.title.trim()
-    const matchedId = titleToId.get(key)
-    if (matchedId) {
-      incomingToTargetId.set(col.id, matchedId)
-      continue
-    }
-    const nextCol: DynamicColumn = {
-      id: createTableColumnId(),
-      title: col.title,
-      tags: normalizeTags(col.tags),
-    }
-    mergedColumns.push(nextCol)
-    titleToId.set(nextCol.title.trim(), nextCol.id)
-    incomingToTargetId.set(col.id, nextCol.id)
-  }
-
-  const normalizeRow = (row: DynamicRow): DynamicRow => {
-    const next: DynamicRow = { id: row.id }
-    for (const col of mergedColumns) {
-      next[col.id] = row[col.id] ?? ""
-    }
-    return next
-  }
-
-  const existingRows = existing.rows.map(normalizeRow)
-  const incomingRows = incoming.rows.map((row) => {
-    const next: DynamicRow = { id: createTableRowId() }
-    for (const col of mergedColumns) {
-      next[col.id] = ""
-    }
-    for (const sourceCol of incoming.columns) {
-      const targetId = incomingToTargetId.get(sourceCol.id)
-      if (!targetId) continue
-      next[targetId] = row[sourceCol.id] ?? ""
-    }
-    return next
-  })
-
-  return { columns: mergedColumns, rows: [...existingRows, ...incomingRows] }
 }
 
 function buildNewDraft(defaults: NewRequirementDefaults, draftId: string): RequirementDetail {
@@ -510,6 +613,7 @@ export function RequirementDrawer({
   const [appendImportedRows, setAppendImportedRows] = useState(false)
   const [editingTagColumnId, setEditingTagColumnId] = useState<string | null>(null)
   const [editingTagValue, setEditingTagValue] = useState("")
+  const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null)
 
   const resetFormState = () => {
     setIsEditing(false)
@@ -527,6 +631,7 @@ export function RequirementDrawer({
     setAppendImportedRows(false)
     setEditingTagColumnId(null)
     setEditingTagValue("")
+    setEditingCell(null)
   }
 
   const newDraftSessionIdRef = useRef<string>("")
@@ -563,6 +668,7 @@ export function RequirementDrawer({
       setEditTableData(emptyTableData())
     }
     setTableFilter("all")
+    setEditingCell(null)
   }, [])
 
   const latestEffectiveRef = useRef<RequirementDetail | null>(null)
@@ -590,6 +696,7 @@ export function RequirementDrawer({
     const req = latestEffectiveRef.current
     if (!req) return
     hydrateFieldsFromRequirement(req)
+    setEditingCell(null)
     setIsEditing(true)
   }
 
@@ -686,6 +793,10 @@ export function RequirementDrawer({
   }
 
   const handleDeleteTableRow = (rowIndex: number) => {
+    const deletedId = editTableData.rows[rowIndex]?.id
+    if (deletedId && editingCell?.rowId === deletedId) {
+      setEditingCell(null)
+    }
     setEditTableData((prev) => ({ ...prev, rows: prev.rows.filter((_, i) => i !== rowIndex) }))
   }
 
@@ -708,6 +819,7 @@ export function RequirementDrawer({
   }
 
   const handleDeleteTableColumn = (columnId: string) => {
+    setEditingCell((cur) => (cur?.colId === columnId ? null : cur))
     setEditTableData((prev) => ({
       columns: prev.columns.filter((c) => c.id !== columnId),
       rows: prev.rows.map((row) => {
@@ -746,22 +858,35 @@ export function RequirementDrawer({
   }
 
   const handleClipboardImport = () => {
-    const parsed = parseClipboardTextToTableData(clipboardText)
-    if (!parsed) return
-    setEditTableData((prev) => mergeTableDataForImport(prev, parsed, appendImportedRows))
+    const raw = clipboardText.trim()
+    if (!raw) return
+    setEditingCell(null)
+
+    if (appendImportedRows) {
+      const matrix = cleanPastedTsvMatrix(parseTsvToMatrix(raw))
+      if (matrix.length === 0) return
+      setEditTableData((prev) => mergeTableDataForAppendByHeader(prev, matrix))
+    } else {
+      const parsed = parseClipboardTextToTableData(raw)
+      if (!parsed) return
+      setEditTableData(parsed)
+    }
     setClipboardText("")
     setShowClipboardImport(false)
   }
 
   const handleSave = () => {
     if (!effectiveRequirement || !onSave) return
+    setEditingCell(null)
+    const tableToPersist = stripEmptyRowsFromTableData(editTableData)
+    setEditTableData(tableToPersist)
     const updatedRequirement: RequirementDetail = {
       ...effectiveRequirement,
       title: editTitle,
       version: editVersion,
       category: editCategory || effectiveRequirement.category,
       description: serializeDescriptionBlocksToContent(editDescriptionBlocks),
-      tableData: editTableData,
+      tableData: tableToPersist,
     }
     onSave(updatedRequirement)
     onOpenChange(false)
@@ -1061,8 +1186,21 @@ export function RequirementDrawer({
                 </div>
                 {showClipboardImport && (
                   <div className="mt-3 rounded-md border border-sky-200 bg-white p-3 space-y-2">
-                    <p className="text-xs text-slate-600">
-                      请直接从 Excel 或飞书表格中复制数据并粘贴于此。系统会自动将第一行作为表头（列名）。
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {appendImportedRows ? (
+                        <>
+                          <span className="font-medium text-slate-700">追加模式：</span>
+                          剪贴板<strong>第一行为列名</strong>，与当前表格列名<strong>完全匹配（trim 后）</strong>的列会合并写入同一列；
+                          未匹配的列名会在表尾<strong>自动新建列</strong>（标签按列名智能推断，兜底为 all）。从<strong>第二行起</strong>
+                          为数据行：第 1 行粘贴数据对齐表格第 1 行并<strong>就地合并</strong>，仅当粘贴行数超过现有行数时才在底部<strong>新增行</strong>；旧行会自动带上新列（空或粘贴值）。
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-medium text-slate-700">覆盖模式：</span>
+                          请粘贴含表头的矩形区域；系统会将<strong>第一行作为列名</strong>，从第二行起导入为数据，并
+                          <strong>替换</strong>当前整张表。
+                        </>
+                      )}
                     </p>
                     <Textarea
                       value={clipboardText}
@@ -1211,10 +1349,34 @@ export function RequirementDrawer({
                             )}
                           >
                             {isEditing ? (
-                              <TableMatrixCell
-                                value={row[col.id] ?? ""}
-                                onChange={(next) => handleTableCellEdit(rowIndex, col.id, next)}
-                              />
+                              editingCell?.rowId === row.id && editingCell?.colId === col.id ? (
+                                <TableMatrixCellEditor
+                                  key={`${row.id}-${col.id}`}
+                                  initialValue={String(row[col.id] ?? "")}
+                                  onCommit={(value) => {
+                                    handleTableCellEdit(rowIndex, col.id, value)
+                                    setEditingCell(null)
+                                  }}
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  className={cn(
+                                    "w-full min-h-[52px] text-left rounded-sm px-2 py-1.5 text-xs leading-relaxed text-slate-800",
+                                    "hover:bg-slate-50 cursor-text transition-colors",
+                                    "border border-transparent hover:border-slate-200/70"
+                                  )}
+                                  onClick={() => setEditingCell({ rowId: row.id, colId: col.id })}
+                                >
+                                  <span className="block whitespace-pre-wrap break-words">
+                                    {cellValue.trim() === "" ? (
+                                      <span className="text-slate-300 select-none">&nbsp;</span>
+                                    ) : (
+                                      cellValue
+                                    )}
+                                  </span>
+                                </button>
+                              )
                             ) : (
                               <span className="whitespace-pre-wrap break-words text-slate-700">
                                 {String(row[col.id] ?? "").trim() === "" ? "-" : String(row[col.id] ?? "")}
