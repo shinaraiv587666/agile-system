@@ -368,77 +368,87 @@ export default function Home() {
   }, [fetchAllData, requirements, selectedProjectId, supportsProjectId])
 
   const persistTestCases = useCallback(async (requirementId: string, nextCases: TestCase[]) => {
-    const current = requirements.find(r => r.id === requirementId)?.testCases ?? []
-    const currentIds = new Set(current.map(tc => tc.id).filter(isUuid))
-    const nextIds = new Set(nextCases.map(tc => tc.id).filter(isUuid))
-    const deleted = Array.from(currentIds).filter(id => !nextIds.has(id))
-    if (deleted.length > 0) {
-      const { error } = await supabase.from("test_cases").delete().in("id", deleted)
-      if (error) throw error
-    }
+    try {
+      const current = requirements.find(r => r.id === requirementId)?.testCases ?? []
+      const currentIds = new Set(current.map(tc => tc.id).filter(isUuid))
+      const nextIds = new Set(nextCases.map(tc => tc.id).filter(isUuid))
+      const deleted = Array.from(currentIds).filter(id => !nextIds.has(id))
+      if (deleted.length > 0) {
+        const { error } = await supabase.from("test_cases").delete().in("id", deleted)
+        if (error) throw error
+      }
 
-    for (const tc of nextCases) {
-      const payload = {
-        requirement_id: requirementId,
-        case_no: tc.number,
-        title: tc.title,
-        preconditions: tc.precondition,
-        steps: tc.steps,
-        expected_result: tc.expected,
-        is_checked: tc.checked,
+      for (const tc of nextCases) {
+        const payload = {
+          requirement_id: requirementId,
+          case_no: tc.number,
+          title: tc.title,
+          preconditions: tc.precondition,
+          steps: tc.steps,
+          expected_result: tc.expected,
+          is_checked: tc.checked,
+        }
+        if (isUuid(tc.id)) {
+          const { error } = await supabase.from("test_cases").update(payload).eq("id", tc.id)
+          if (error) throw error
+        } else {
+          const { error } = await supabase.from("test_cases").insert(payload)
+          if (error) throw error
+        }
       }
-      if (isUuid(tc.id)) {
-        const { error } = await supabase.from("test_cases").update(payload).eq("id", tc.id)
-        if (error) throw error
-      } else {
-        const { error } = await supabase.from("test_cases").insert(payload)
-        if (error) throw error
-      }
+      console.log("Save Success", { scope: "test_cases", requirementId, count: nextCases.length })
+    } catch (error) {
+      console.error("persistTestCases failed:", error instanceof Error ? error.message : String(error))
+      throw error
     }
-    await fetchAllData()
-  }, [fetchAllData, requirements])
+  }, [requirements])
 
   const persistIterations = useCallback(async (requirementId: string, nextIterations: IterationRecord[]) => {
-    const current = requirements.find(r => r.id === requirementId)?.iterationHistory ?? []
-    const currentIds = new Set(current.map(item => item.id).filter(isUuid))
-    const nextIds = new Set(nextIterations.map(item => item.id).filter(isUuid))
-    const deleted = Array.from(currentIds).filter(id => !nextIds.has(id))
-    if (deleted.length > 0) {
-      const { error } = await supabase.from("iterations").delete().in("id", deleted)
-      if (error) throw error
-    }
+    try {
+      const current = requirements.find(r => r.id === requirementId)?.iterationHistory ?? []
+      const currentIds = new Set(current.map(item => item.id).filter(isUuid))
+      const nextIds = new Set(nextIterations.map(item => item.id).filter(isUuid))
+      const deleted = Array.from(currentIds).filter(id => !nextIds.has(id))
+      if (deleted.length > 0) {
+        const { error } = await supabase.from("iterations").delete().in("id", deleted)
+        if (error) throw error
+      }
 
-    const now = new Date().toISOString()
-    const existingPayloads = nextIterations
-      .filter((it) => isUuid(it.id))
-      .map((it) => ({
-        id: it.id,
-        requirement_id: requirementId,
-        version: it.version,
-        change_log: it.changes,
-        modified_at: now,
-      }))
-    if (existingPayloads.length > 0) {
-      const { error } = await supabase
-        .from("iterations")
-        .upsert(existingPayloads, { onConflict: "id" })
-      if (error) throw error
-    }
+      const now = new Date().toISOString()
+      const existingPayloads = nextIterations
+        .filter((it) => isUuid(it.id))
+        .map((it) => ({
+          id: it.id,
+          requirement_id: requirementId,
+          version: it.version,
+          change_log: it.changes,
+          modified_at: now,
+        }))
+      if (existingPayloads.length > 0) {
+        const { error } = await supabase
+          .from("iterations")
+          .upsert(existingPayloads, { onConflict: "id" })
+        if (error) throw error
+      }
 
-    const newPayloads = nextIterations
-      .filter((it) => !isUuid(it.id))
-      .map((it) => ({
-        requirement_id: requirementId,
-        version: it.version,
-        change_log: it.changes,
-        modified_at: now,
-      }))
-    if (newPayloads.length > 0) {
-      const { error } = await supabase.from("iterations").insert(newPayloads)
-      if (error) throw error
+      const newPayloads = nextIterations
+        .filter((it) => !isUuid(it.id))
+        .map((it) => ({
+          requirement_id: requirementId,
+          version: it.version,
+          change_log: it.changes,
+          modified_at: now,
+        }))
+      if (newPayloads.length > 0) {
+        const { error } = await supabase.from("iterations").insert(newPayloads)
+        if (error) throw error
+      }
+      console.log("Save Success", { scope: "iterations", requirementId, count: nextIterations.length })
+    } catch (error) {
+      console.error("persistIterations failed:", error instanceof Error ? error.message : String(error))
+      throw error
     }
-    await fetchAllData()
-  }, [fetchAllData, requirements])
+  }, [requirements])
 
   const handleCreateProject = useCallback(async (name: string) => {
     if (!projectsDbEnabled) {
@@ -685,6 +695,7 @@ export default function Home() {
             onRequirementsChange={persistRequirementList}
             onPersistTestCases={persistTestCases}
             onPersistIterations={persistIterations}
+            onRefreshRequirements={fetchAllData}
           />
           )}
         </div>

@@ -48,7 +48,8 @@ export function IterationHistoryDialog({
     [localIterations, initialSnapshot]
   )
 
-  // Sync with props when dialog opens
+  // 抽屉打开时按外部迭代记录内容强制同步（指纹避免仅数组引用不变时漏刷新）
+  const externalIterationsFingerprint = snapshot(iterations)
   useEffect(() => {
     if (!open) return
     setLocalIterations(iterations.map((r) => ({ ...r })))
@@ -56,7 +57,7 @@ export function IterationHistoryDialog({
     setEditingId(null)
     setIsAdding(false)
     setAddForm({ version: "", changes: "" })
-  }, [open, iterations])
+  }, [open, externalIterationsFingerprint])
 
   const handleEdit = (record: IterationRecord) => {
     setEditingId(record.id)

@@ -28,6 +28,8 @@ interface RequirementListProps {
   onRequirementsChange: (requirements: RequirementDetail[]) => void | Promise<void>
   onPersistTestCases: (requirementId: string, testCases: TestCase[]) => Promise<void>
   onPersistIterations: (requirementId: string, iterations: IterationRecord[]) => Promise<void>
+  /** 持久化成功后由列表调用，用于从数据库重新拉取需求列表（含用例 / 迭代的真实 ID） */
+  onRefreshRequirements: () => Promise<void>
 }
 
 export function RequirementList({ 
@@ -47,6 +49,7 @@ export function RequirementList({
   onRequirementsChange,
   onPersistTestCases,
   onPersistIterations,
+  onRefreshRequirements,
 }: RequirementListProps) {
   const [activeCategory, setActiveCategory] = useState("all")
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -115,14 +118,10 @@ export function RequirementList({
 
   const handleCommitTestCases = useCallback(async (testCases: TestCase[]) => {
     if (!testingRequirement) return
-    try {
-      // Drawer edits are local; persist once when closing.
-      await onPersistTestCases(testingRequirement.id, testCases)
-      setTestingRequirement(prev => prev ? { ...prev, testCases } : null)
-    } catch (error) {
-      console.error("Failed to persist test cases:", error instanceof Error ? error.message : String(error))
-    }
-  }, [testingRequirement, onPersistTestCases])
+    // 先写库，再强制刷新主列表，确保下次打开抽屉拿到服务端数据（含新 insert 的 UUID）
+    await onPersistTestCases(testingRequirement.id, testCases)
+    await onRefreshRequirements()
+  }, [testingRequirement, onPersistTestCases, onRefreshRequirements])
 
   const handleAllComplete = useCallback((allComplete: boolean) => {
     if (!testingRequirement) return
@@ -217,12 +216,9 @@ export function RequirementList({
   }, [activeCategory, projectCategories])
 
   const handleCommitIterations = useCallback(async (requirementId: string, iterations: IterationRecord[]) => {
-    try {
-      await onPersistIterations(requirementId, iterations)
-    } catch (error) {
-      console.error("Failed to persist iteration history:", error instanceof Error ? error.message : String(error))
-    }
-  }, [onPersistIterations])
+    await onPersistIterations(requirementId, iterations)
+    await onRefreshRequirements()
+  }, [onPersistIterations, onRefreshRequirements])
 
   return (
     <div className="space-y-4">
@@ -318,10 +314,9 @@ export function RequirementList({
         }}
         title={iterationRequirement?.title ?? "迭代历史"}
         iterations={iterationRequirement?.iterationHistory ?? []}
-        onCommitIterations={(iterations) => {
+        onCommitIterations={async (iterations) => {
           if (!iterationRequirement) return
-          handleCommitIterations(iterationRequirement.id, iterations)
-          setIterationRequirement((prev) => prev ? { ...prev, iterationHistory: iterations } : prev)
+          await handleCommitIterations(iterationRequirement.id, iterations)
         }}
       />
     </div>

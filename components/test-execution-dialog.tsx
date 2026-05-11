@@ -148,16 +148,18 @@ export function TestExecutionDialog({
     )
   const [initialSnapshot, setInitialSnapshot] = useState<string>(snapshotCases(testCases))
 
-  // Sync with props when opening
+  // 按「抽屉打开 + 需求 ID + 外部用例内容」同步：避免仅依赖数组引用时漏刷新；打开时深拷贝，杜绝残留引用
+  // externalCasesFingerprint 已覆盖 testCases 各字段内容
+  const externalCasesFingerprint = snapshotCases(testCases)
   useEffect(() => {
     if (!open) return
-    setLocalCases(testCases)
+    setLocalCases(testCases.map((tc) => ({ ...tc })))
     setInitialSnapshot(snapshotCases(testCases))
     setIsAdding(false)
     setIsBulkPasting(false)
     setBulkPasteText("")
     setEditingId(null)
-  }, [open, testCases])
+  }, [open, requirementId, externalCasesFingerprint])
 
   const hasUnsavedChanges = useMemo(
     () => snapshotCases(localCases) !== initialSnapshot,
