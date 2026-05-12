@@ -205,6 +205,13 @@ export function TestExecutionDialog({
   const [bulkPasteText, setBulkPasteText] = useState("")
   const [expandedItems, setExpandedItems] = useState<string[]>([])
   const [isSavingOnClose, setIsSavingOnClose] = useState(false)
+  /** 丢弃关闭时递增，使 await 返回后的保存流程不再关窗/改快照 */
+  const commitSessionRef = useRef(0)
+  const isSavingOnCloseRef = useRef(false)
+
+  useEffect(() => {
+    isSavingOnCloseRef.current = isSavingOnClose
+  }, [isSavingOnClose])
 
   // Store onAllComplete in a ref to avoid triggering effects on callback change
   const onAllCompleteRef = useRef(onAllComplete)
@@ -425,6 +432,12 @@ export function TestExecutionDialog({
     return () => window.removeEventListener("beforeunload", onBeforeUnload)
   }, [open, hasUnsavedChanges])
 
+  useEffect(() => {
+    if (!open) {
+      commitSessionRef.current += 1
+    }
+  }, [open])
+
   const localCasesRef = useRef(localCases)
   const initialSnapshotRef = useRef(initialSnapshot)
   useEffect(() => {
@@ -432,31 +445,25 @@ export function TestExecutionDialog({
     initialSnapshotRef.current = initialSnapshot
   }, [localCases, initialSnapshot])
 
-  /** 遮罩 / X /「关闭」：同步通知父级关抽屉，避免 Radix 受控模式下异步关窗死锁；有改动时在确认后后台保存 */
+  /** 遮罩 / X /「关闭」：仅丢弃本地修改，绝不自动写库（保存仅允许走「保存并关闭」） */
   const performDismiss = useCallback(() => {
-    const rid = requirementId
+    if (isSavingOnCloseRef.current) {
+      toast.info("正在保存到服务器，请稍候再关闭")
+      return
+    }
+
     const casesCopy = localCasesRef.current.map((tc) => ({ ...tc }))
     const dirty = snapshotCases(casesCopy) !== initialSnapshotRef.current
 
     if (dirty) {
       const ok = window.confirm(
-        "有未保存的更改。确定关闭？将尝试在后台自动保存；若失败会弹出提示，您可稍后重新打开再试。"
+        "有未保存的更改。确定要关闭吗？关闭后将丢弃本次修改，不会保存到数据库。"
       )
       if (!ok) return
     }
 
     onOpenChange(false)
-
-    if (dirty && rid) {
-      const toSave = dedupeCaseNumbersForPersist(casesCopy)
-      void Promise.resolve(onCommitTestCases(rid, toSave)).catch((err: unknown) => {
-        console.error("Test cases background save failed:", stringifyErrorForLog(err))
-        toast.error("保存失败", {
-          description: friendlyTestCaseSaveError(err),
-        })
-      })
-    }
-  }, [requirementId, onOpenChange, onCommitTestCases])
+  }, [onOpenChange])
 
   const handleSheetOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -469,7 +476,7 @@ export function TestExecutionDialog({
     [onOpenChange, performDismiss]
   )
 
-  /** 明确「保存并关闭」：等待写库与刷新成功后再关；失败则 Toast 并保持打开 */
+  /** 明确「保存并关闭」：仅此路径调用 onCommitTestCases */
   const handleSaveAndClose = useCallback(async () => {
     if (!requirementId) {
       toast.error("无法保存", { description: "缺少需求 ID" })
@@ -480,11 +487,15 @@ export function TestExecutionDialog({
       onOpenChange(false)
       return
     }
+    const sessionAtStart = commitSessionRef.current
     setIsSavingOnClose(true)
     try {
       const normalized = dedupeCaseNumbersForPersist(localCases)
       setLocalCases(normalized)
       await onCommitTestCases(requirementId, normalized)
+      if (commitSessionRef.current !== sessionAtStart) {
+        return
+      }
       setInitialSnapshot(snapshotCases(normalized))
       onOpenChange(false)
     } catch (err: unknown) {
@@ -987,6 +998,7 @@ export function TestExecutionDialog({
             variant="outline"
             size="sm"
             className="h-9"
+            disabled={isSavingOnClose}
             onClick={performDismiss}
           >
             关闭
