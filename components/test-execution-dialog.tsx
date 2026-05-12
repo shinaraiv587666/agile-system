@@ -37,6 +37,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
+import { computeTestCasesCompletion, useTestCasesImportantFilter } from "@/components/test-cases-important-filter-context"
 
 // 5-field test case structure
 export interface TestCase {
@@ -199,7 +200,7 @@ export function TestExecutionDialog({
   const [addForm, setAddForm] = useState<TestCaseFormFields>({
     number: "", title: "", precondition: "", steps: "", expected: ""
   })
-  const [showImportantOnly, setShowImportantOnly] = useState(false)
+  const { showImportantOnly, setShowImportantOnly } = useTestCasesImportantFilter()
   const [isBulkPasting, setIsBulkPasting] = useState(false)
   const [bulkPasteText, setBulkPasteText] = useState("")
   const [expandedItems, setExpandedItems] = useState<string[]>([])
@@ -238,7 +239,6 @@ export function TestExecutionDialog({
     setIsBulkPasting(false)
     setBulkPasteText("")
     setEditingId(null)
-    setShowImportantOnly(false)
   }, [open, requirementId, externalCasesFingerprint])
 
   const hasUnsavedChanges = useMemo(
@@ -247,10 +247,18 @@ export function TestExecutionDialog({
   )
 
   // Derive completion status using useMemo (NOT useState + useEffect)
+  const showCompletionBanner = useMemo(() => {
+    if (localCases.length === 0) return false
+    if (!showImportantOnly) return localCases.every((tc) => tc.checked)
+    const stars = localCases.filter((tc) => tc.isImportant)
+    return stars.length > 0 && stars.every((tc) => tc.checked)
+  }, [localCases, showImportantOnly])
+
+  /** 与主界面卡片 / completed 集合同步：开启「仅看重点」且无标星时视为该需求测试目标已满足 */
   const allComplete = useMemo(() => {
-    // 业务规则：未配置用例（0 条）不算 Completed
-    return localCases.length > 0 && localCases.every(tc => tc.checked)
-  }, [localCases])
+    if (localCases.length === 0) return false
+    return computeTestCasesCompletion(localCases, showImportantOnly).completed
+  }, [localCases, showImportantOnly])
 
   // Notify parent only when completion status actually changes
   useEffect(() => {
@@ -375,7 +383,19 @@ export function TestExecutionDialog({
     // Keep browser default paste behavior; parse happens on import
   }
 
-  const completedCount = localCases.filter(tc => tc.checked).length
+  const badgeStats = useMemo(() => {
+    const { importantChecked, importantCount } = computeTestCasesCompletion(
+      localCases,
+      showImportantOnly
+    )
+    if (!showImportantOnly) {
+      return {
+        numerator: localCases.filter((tc) => tc.checked).length,
+        denominator: localCases.length,
+      }
+    }
+    return { numerator: importantChecked, denominator: importantCount }
+  }, [localCases, showImportantOnly])
 
   const displayedCases = useMemo(
     () => (showImportantOnly ? localCases.filter((tc) => tc.isImportant) : localCases),
@@ -509,7 +529,7 @@ export function TestExecutionDialog({
                     : "bg-slate-100 text-slate-600"
                 )}
               >
-                {completedCount} / {localCases.length}
+                {badgeStats.numerator} / {badgeStats.denominator}
               </Badge>
               {!editingId && (
                 <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
@@ -947,7 +967,7 @@ export function TestExecutionDialog({
         </div>
 
         {/* Footer */}
-        {allComplete && localCases.length > 0 && (
+        {showCompletionBanner && (
           <div className="shrink-0 p-5 border-t border-slate-100 bg-gradient-to-r from-emerald-50 via-green-50 to-teal-50">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shrink-0 shadow-lg shadow-emerald-500/20">

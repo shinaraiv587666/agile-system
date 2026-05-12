@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { Project, ProjectSidebar } from "@/components/project-sidebar"
 import { RequirementList } from "@/components/requirement-list"
+import { TestCasesImportantFilterProvider } from "@/components/test-cases-important-filter-context"
 import { MatrixTableData, RequirementDetail } from "@/components/requirement-drawer"
 import { TestCase } from "@/components/test-execution-dialog"
 import { IterationRecord } from "@/components/iteration-history-dialog"
@@ -734,7 +735,8 @@ export default function Home() {
           {loading ? (
             <div className="text-sm text-slate-500">正在从 Supabase 加载数据...</div>
           ) : (
-          <RequirementList 
+          <TestCasesImportantFilterProvider>
+            <RequirementList 
             projectId={selectedProjectId}
             projectCategories={activeCategories}
             completedRequirements={completedRequirements}
@@ -753,6 +755,7 @@ export default function Home() {
             onPersistIterations={persistIterations}
             onRefreshRequirements={fetchAllData}
           />
+          </TestCasesImportantFilterProvider>
           )}
         </div>
       </main>

@@ -8,9 +8,14 @@ import {
   RequirementDetail,
   getDescriptionSearchPlainText,
 } from "@/components/requirement-drawer"
-import { TestExecutionDialog, TestCase } from "@/components/test-execution-dialog"
+import { TestExecutionDialog, type TestCase } from "@/components/test-execution-dialog"
 import { IterationHistoryDialog, IterationRecord } from "@/components/iteration-history-dialog"
 import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
+import {
+  deriveRequirementCardTestPhase,
+  deriveRequirementCardTestStatus,
+  useTestCasesImportantFilter,
+} from "@/components/test-cases-important-filter-context"
 
 interface RequirementListProps {
   projectId: string
@@ -52,6 +57,7 @@ export function RequirementList({
   onPersistIterations,
   onRefreshRequirements,
 }: RequirementListProps) {
+  const { showImportantOnly } = useTestCasesImportantFilter()
   const [activeCategory, setActiveCategory] = useState("all")
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [selectedRequirement, setSelectedRequirement] = useState<RequirementDetail | null>(null)
@@ -69,12 +75,7 @@ export function RequirementList({
     : requirements.filter(r => r.category === activeCategory)
 
   const visibleRequirements = filteredRequirements.filter((req) => {
-    const testStatus: "completed" | "incomplete" | "noTest" =
-      req.testCases.length === 0
-        ? "noTest"
-        : req.testCases.every((tc) => tc.checked)
-          ? "completed"
-          : "incomplete"
+    const testStatus = deriveRequirementCardTestStatus(req.testCases, showImportantOnly)
 
     if (statusFilter !== "all" && statusFilter !== testStatus) return false
     const descSearch = getDescriptionSearchPlainText(req.description)
@@ -260,13 +261,7 @@ export function RequirementList({
             onClick={() => handleCardClick(requirement)}
             onTestClick={() => handleTestIconClick(requirement)}
             onIterationClick={() => handleIterationClick(requirement)}
-            testStatus={
-              requirement.testCases.length === 0
-                ? "noTest"
-                : requirement.testCases.every((tc) => tc.checked)
-                  ? "completed"
-                  : "incomplete"
-            }
+            testPhase={deriveRequirementCardTestPhase(requirement.testCases, showImportantOnly)}
             iterationCount={requirement.iterationHistory.length}
           />
         ))}

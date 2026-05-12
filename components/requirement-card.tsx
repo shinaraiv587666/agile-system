@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { CheckCircle2, History, FlaskConical } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import type { RequirementCardTestPhase } from "@/components/test-cases-important-filter-context"
 
 export interface Requirement {
   id: string
@@ -19,7 +20,8 @@ interface RequirementCardProps {
   onClick?: () => void
   onTestClick?: () => void
   onIterationClick?: () => void
-  testStatus?: "completed" | "incomplete" | "noTest"
+  /** 测试红绿灯：noTest 未配置 | inProgress 有目标未全勾 | completed 目标全勾 | idleFilter 有用例但过滤下无目标 */
+  testPhase?: RequirementCardTestPhase
   iterationCount?: number
 }
 
@@ -35,7 +37,7 @@ export function RequirementCard({
   onClick,
   onTestClick,
   onIterationClick,
-  testStatus = "incomplete",
+  testPhase = "inProgress",
   iterationCount = 0,
 }: RequirementCardProps) {
   const handleTestIconClick = (e: React.MouseEvent) => {
@@ -54,10 +56,12 @@ export function RequirementCard({
     <>
       <Card 
         className={cn(
-          "group relative bg-white border-slate-200 hover:border-slate-300",
-          "transition-all duration-200 ease-out cursor-pointer",
+          "group relative bg-white border transition-all duration-200 ease-out cursor-pointer",
           "hover:shadow-xl hover:shadow-slate-300/40 hover:-translate-y-1",
-          testStatus === "completed" && "ring-1 ring-green-200 border-green-200"
+          testPhase === "completed" && "border-emerald-200 ring-1 ring-emerald-200/90 hover:border-emerald-300",
+          testPhase === "inProgress" && "border-sky-100 hover:border-sky-200/80",
+          (testPhase === "noTest" || testPhase === "idleFilter") &&
+            "border-slate-200 hover:border-slate-300"
         )}
         style={{
           animationDelay: `${index * 20}ms`
@@ -101,7 +105,7 @@ export function RequirementCard({
                     onClick={handleHistoryIconClick}
                       className={cn(
                         "shrink-0 p-1 rounded-full hover:bg-slate-100 transition-colors",
-                        testStatus === "noTest" ? "text-slate-300" : "text-slate-400 hover:text-slate-700"
+                        testPhase === "noTest" ? "text-slate-300" : "text-slate-400 hover:text-slate-700"
                       )}
                     aria-label="查看版本历史"
                   >
@@ -119,27 +123,30 @@ export function RequirementCard({
                     onClick={handleTestIconClick}
                       className={cn(
                         "shrink-0 p-1 rounded-full hover:bg-slate-100 transition-colors",
-                        testStatus === "completed"
-                          ? "text-emerald-500"
-                          : testStatus === "noTest"
-                            ? "text-slate-300"
-                            : "text-emerald-500"
+                        testPhase === "completed" && "text-emerald-500",
+                        testPhase === "noTest" && "text-slate-300",
+                        testPhase === "inProgress" && "text-emerald-500",
+                        testPhase === "idleFilter" && "text-slate-400"
                       )}
                       aria-label={
-                        testStatus === "completed"
-                          ? "查看测试执行"
-                          : testStatus === "noTest"
+                        testPhase === "completed"
+                          ? "查看测试执行（目标已全部完成）"
+                          : testPhase === "noTest"
                             ? "未配置用例"
-                            : "执行测试用例"
+                            : testPhase === "idleFilter"
+                              ? "查看测试执行（当前无重点用例）"
+                              : "执行测试用例（进行中）"
                       }
                   >
-                      {testStatus === "completed" ? (
+                      {testPhase === "completed" ? (
                         <CheckCircle2 className="w-4 h-4" strokeWidth={2} />
                       ) : (
                         <FlaskConical
                           className={cn(
                             "w-4 h-4",
-                            testStatus === "noTest" ? "text-slate-300 opacity-100" : "text-emerald-500"
+                            testPhase === "noTest" && "text-slate-300",
+                            testPhase === "inProgress" && "text-emerald-500",
+                            testPhase === "idleFilter" && "text-slate-400"
                           )}
                           strokeWidth={2}
                         />
@@ -147,11 +154,13 @@ export function RequirementCard({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent sideOffset={6}>
-                    {testStatus === "completed"
-                      ? "查看测试执行（已完成）"
-                      : testStatus === "noTest"
+                    {testPhase === "completed"
+                      ? "查看测试执行（目标已全部完成）"
+                      : testPhase === "noTest"
                         ? "未配置用例"
-                        : "点击执行测试用例"}
+                        : testPhase === "idleFilter"
+                          ? "查看测试执行（仅看重点：暂无标星用例）"
+                          : "点击执行测试用例（进行中）"}
                 </TooltipContent>
               </Tooltip>
             </div>
