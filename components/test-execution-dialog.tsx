@@ -12,13 +12,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
-  AccordionTrigger,
 } from "@/components/ui/accordion"
 import { cn, uniqueClientId } from "@/lib/utils"
 import { 
@@ -32,7 +32,8 @@ import {
   Save,
   ChevronDown,
   ListChecks,
-  ClipboardPaste
+  ClipboardPaste,
+  Star,
 } from "lucide-react"
 import { toast } from "sonner"
 import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
@@ -46,7 +47,11 @@ export interface TestCase {
   steps: string        // 步骤
   expected: string     // 预期结果
   checked: boolean
+  /** 核心 / 冒烟用例，对应 DB is_important */
+  isImportant: boolean
 }
+
+type TestCaseFormFields = Omit<TestCase, "id" | "checked" | "isImportant">
 
 interface TestExecutionDialogProps {
   open: boolean
@@ -187,13 +192,14 @@ export function TestExecutionDialog({
 }: TestExecutionDialogProps) {
   const [localCases, setLocalCases] = useState<TestCase[]>(testCases)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState<Omit<TestCase, "id" | "checked">>({
+  const [editForm, setEditForm] = useState<TestCaseFormFields>({
     number: "", title: "", precondition: "", steps: "", expected: ""
   })
   const [isAdding, setIsAdding] = useState(false)
-  const [addForm, setAddForm] = useState<Omit<TestCase, "id" | "checked">>({
+  const [addForm, setAddForm] = useState<TestCaseFormFields>({
     number: "", title: "", precondition: "", steps: "", expected: ""
   })
+  const [showImportantOnly, setShowImportantOnly] = useState(false)
   const [isBulkPasting, setIsBulkPasting] = useState(false)
   const [bulkPasteText, setBulkPasteText] = useState("")
   const [expandedItems, setExpandedItems] = useState<string[]>([])
@@ -216,6 +222,7 @@ export function TestExecutionDialog({
         steps: tc.steps,
         expected: tc.expected,
         checked: tc.checked,
+        isImportant: tc.isImportant,
       }))
     )
   const [initialSnapshot, setInitialSnapshot] = useState<string>(snapshotCases(testCases))
@@ -225,12 +232,13 @@ export function TestExecutionDialog({
   const externalCasesFingerprint = snapshotCases(testCases)
   useEffect(() => {
     if (!open) return
-    setLocalCases(testCases.map((tc) => ({ ...tc })))
+    setLocalCases(testCases.map((tc) => ({ ...tc, isImportant: Boolean(tc.isImportant) })))
     setInitialSnapshot(snapshotCases(testCases))
     setIsAdding(false)
     setIsBulkPasting(false)
     setBulkPasteText("")
     setEditingId(null)
+    setShowImportantOnly(false)
   }, [open, requirementId, externalCasesFingerprint])
 
   const hasUnsavedChanges = useMemo(
@@ -258,6 +266,14 @@ export function TestExecutionDialog({
       tc.id === id ? { ...tc, checked: !tc.checked } : tc
     )
     setLocalCases(updated)
+  }
+
+  const handleToggleImportant = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    setLocalCases((prev) =>
+      prev.map((tc) => (tc.id === id ? { ...tc, isImportant: !tc.isImportant } : tc))
+    )
   }
 
   const handleEdit = (tc: TestCase, e: React.MouseEvent) => {
@@ -302,7 +318,8 @@ export function TestExecutionDialog({
       precondition: addForm.precondition,
       steps: addForm.steps,
       expected: addForm.expected,
-      checked: false
+      checked: false,
+      isImportant: false,
     }
     const updated = [...localCases, newCase]
     setLocalCases(updated)
@@ -344,6 +361,7 @@ export function TestExecutionDialog({
         steps: cols[3] ?? "",
         expected: cols[4] ?? "",
         checked: false,
+        isImportant: false,
       }
     })
 
@@ -358,6 +376,20 @@ export function TestExecutionDialog({
   }
 
   const completedCount = localCases.filter(tc => tc.checked).length
+
+  const displayedCases = useMemo(
+    () => (showImportantOnly ? localCases.filter((tc) => tc.isImportant) : localCases),
+    [localCases, showImportantOnly]
+  )
+
+  const displayedCaseIds = useMemo(
+    () => new Set(displayedCases.map((c) => c.id)),
+    [displayedCases]
+  )
+
+  useEffect(() => {
+    setExpandedItems((prev) => prev.filter((id) => displayedCaseIds.has(id)))
+  }, [displayedCaseIds])
 
   const toggleExpanded = (id: string) => {
     setExpandedItems((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id])
@@ -480,7 +512,7 @@ export function TestExecutionDialog({
                 {completedCount} / {localCases.length}
               </Badge>
               {!editingId && (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
                   {!isAdding && (
                     <Button
                       size="sm"
@@ -508,6 +540,31 @@ export function TestExecutionDialog({
                     <ClipboardPaste className="w-4 h-4" />
                     批量粘贴
                   </Button>
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors",
+                      showImportantOnly
+                        ? "border-amber-200 bg-amber-50/80"
+                        : "border-slate-200 bg-slate-50/80"
+                    )}
+                  >
+                    <Switch
+                      id="test-cases-important-only"
+                      checked={showImportantOnly}
+                      onCheckedChange={setShowImportantOnly}
+                      disabled={isSavingOnClose}
+                      className="data-[state=checked]:bg-amber-500"
+                    />
+                    <label
+                      htmlFor="test-cases-important-only"
+                      className={cn(
+                        "text-xs font-medium cursor-pointer select-none whitespace-nowrap",
+                        showImportantOnly ? "text-amber-900" : "text-slate-600"
+                      )}
+                    >
+                      ⭐ 仅看重点
+                    </label>
+                  </div>
                 </div>
               )}
               {isSavingOnClose && (
@@ -648,13 +705,31 @@ export function TestExecutionDialog({
           )}
 
           {/* Test case list */}
+          {showImportantOnly && displayedCases.length === 0 && localCases.length > 0 ? (
+            <div className="flex flex-col items-center justify-center py-14 px-4 rounded-xl border border-dashed border-amber-200 bg-amber-50/40 text-center">
+              <Star className="w-10 h-10 text-amber-300 mb-3" />
+              <p className="text-sm font-medium text-amber-900 mb-1">暂无重点用例</p>
+              <p className="text-xs text-amber-800/80 mb-4 max-w-sm">
+                当前列表下没有标星的核心用例。可关闭「仅看重点」查看全部，或在用例卡片上点击星星标星。
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-amber-300 text-amber-900 hover:bg-amber-100"
+                onClick={() => setShowImportantOnly(false)}
+              >
+                查看全部用例
+              </Button>
+            </div>
+          ) : (
           <Accordion
             type="multiple" 
             value={expandedItems}
             onValueChange={setExpandedItems}
             className="space-y-3"
           >
-            {localCases.map((tc) => (
+            {displayedCases.map((tc) => (
               <AccordionItem 
                 key={tc.id} 
                 value={tc.id}
@@ -680,21 +755,42 @@ export function TestExecutionDialog({
                   />
                   
                   {/* Main trigger area */}
-                  <div className="flex-1 flex items-center gap-3 min-w-0">
+                  <div className="flex-1 flex items-center gap-2 min-w-0">
+                    <Badge 
+                      variant="outline" 
+                      className={cn(
+                        "shrink-0 text-xs px-2 py-0.5 font-mono font-medium transition-colors",
+                        tc.checked ? "bg-emerald-50 border-emerald-200 text-emerald-600" : "bg-slate-50"
+                      )}
+                    >
+                      {tc.number}
+                    </Badge>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-8 w-8 shrink-0 rounded-md transition-colors",
+                        tc.isImportant
+                          ? "text-yellow-500 hover:text-yellow-600 hover:bg-yellow-50"
+                          : "text-slate-300 hover:text-slate-400 hover:bg-slate-100"
+                      )}
+                      aria-label={tc.isImportant ? "取消重点" : "标为重点用例"}
+                      onClick={(e) => handleToggleImportant(tc.id, e)}
+                      disabled={!!editingId || isSavingOnClose}
+                    >
+                      <Star
+                        className={cn(
+                          "w-4 h-4",
+                          tc.isImportant && "fill-yellow-400 text-yellow-500"
+                        )}
+                      />
+                    </Button>
                     <button
                       type="button"
                       onClick={() => toggleExpanded(tc.id)}
-                      className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      className="flex min-w-0 flex-1 items-center text-left"
                     >
-                      <Badge 
-                        variant="outline" 
-                        className={cn(
-                          "shrink-0 text-xs px-2 py-0.5 font-mono font-medium transition-colors",
-                          tc.checked ? "bg-emerald-50 border-emerald-200 text-emerald-600" : "bg-slate-50"
-                        )}
-                      >
-                        {tc.number}
-                      </Badge>
                       <span className={cn(
                         "text-sm font-medium truncate transition-colors",
                         tc.checked ? "text-slate-400 line-through" : "text-slate-700"
@@ -830,6 +926,7 @@ export function TestExecutionDialog({
               </AccordionItem>
             ))}
           </Accordion>
+          )}
 
           {localCases.length === 0 && !isAdding && (
             <div className="flex flex-col items-center justify-center py-16 text-slate-400">

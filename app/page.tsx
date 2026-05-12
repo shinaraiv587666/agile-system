@@ -221,6 +221,7 @@ export default function Home() {
         steps: String(row.steps ?? ""),
         expected: String(row.expected_result ?? ""),
         checked: Boolean(row.is_checked),
+        isImportant: Boolean(row.is_important),
       })
       testMap.set(reqId, list)
     }
@@ -406,6 +407,7 @@ export default function Home() {
           steps: tc.steps ?? "",
           expected_result: tc.expected ?? "",
           is_checked: Boolean(tc.checked),
+          is_important: Boolean(tc.isImportant),
         }))
       if (existingRows.length > 0) {
         const { error } = await supabase
@@ -428,6 +430,7 @@ export default function Home() {
           steps: tc.steps ?? "",
           expected_result: tc.expected ?? "",
           is_checked: Boolean(tc.checked),
+          is_important: Boolean(tc.isImportant),
         }))
       if (newRows.length > 0) {
         const { error } = await supabase.from("test_cases").insert(newRows)
