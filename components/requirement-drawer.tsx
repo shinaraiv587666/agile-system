@@ -51,10 +51,15 @@ import {
   Plus,
   Trash2,
   Save,
+  Loader2,
   Columns3,
   ClipboardPaste,
   Check,
+  ImagePlus,
 } from "lucide-react"
+import { toast } from "sonner"
+import { supabase } from "@/lib/supabase"
+import { stringifyErrorForLog } from "@/lib/stringify-error"
 import { TestCase } from "@/components/test-execution-dialog"
 import { IterationRecord } from "@/components/iteration-history-dialog"
 
@@ -85,8 +90,8 @@ export interface RequirementDetail {
   description: string
   testCases: TestCase[]
   iterationHistory: IterationRecord[]
-  // Dynamic content - may or may not exist
-  imageUrl?: string
+  // 需求配图（对应 DB image_urls text[]）
+  imageUrls?: string[]
   tableData?: MatrixTableData
 }
 
@@ -230,7 +235,8 @@ interface RequirementDrawerProps {
   /** 新建模式且 requirement 为 null 时用于生成草稿（projectId / 默认分类） */
   newRequirementDefaults?: NewRequirementDefaults | null
   onOpenChange: (open: boolean) => void
-  onSave?: (requirement: RequirementDetail) => void
+  /** 仅此路径写库；请返回 Promise 以便抽屉展示保存中并成功后关窗 */
+  onSave?: (requirement: RequirementDetail) => void | Promise<void>
   onDelete?: (requirementId: string) => void
   isNewRequirement?: boolean
 }
@@ -248,6 +254,51 @@ export function stripEmptyRowsFromTableData(data: MatrixTableData): MatrixTableD
   const columnIds = data.columns.map((c) => c.id)
   const rows = data.rows.filter((row) => !rowHasNoSubstantiveContent(row, columnIds))
   return { columns: data.columns, rows }
+}
+
+const REQUIREMENT_IMAGES_BUCKET = "requirement-images"
+
+export function normalizeRequirementImageUrls(urls: unknown): string[] {
+  if (!Array.isArray(urls)) return []
+  return urls.map((u) => String(u).trim()).filter(Boolean)
+}
+
+function storagePathScopeForRequirement(reqId: string): string {
+  const s = String(reqId).replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-")
+  return (s || "draft").slice(0, 180)
+}
+
+/** 用于脏检测：与表单提交字段一致（描述为序列化后的 content 字符串） */
+function persistenceFingerprint(
+  title: string,
+  version: string,
+  category: string,
+  descriptionSerialized: string,
+  tableData: MatrixTableData,
+  imageUrls: string[]
+): string {
+  const stripped = stripEmptyRowsFromTableData(tableData)
+  const imgs = [...normalizeRequirementImageUrls(imageUrls)].sort()
+  return JSON.stringify({
+    title: String(title ?? "").trim(),
+    version: String(version ?? "").trim(),
+    category: String(category ?? "").trim(),
+    description: String(descriptionSerialized ?? ""),
+    tableData: stripped,
+    imageUrls: imgs,
+  })
+}
+
+function fingerprintFromRequirement(req: RequirementDetail): string {
+  const desc = serializeDescriptionBlocksToContent(parseContentToDescriptionBlocks(req.description))
+  return persistenceFingerprint(
+    req.title,
+    req.version ?? "",
+    req.category ?? "",
+    desc,
+    req.tableData ?? emptyTableData(),
+    normalizeRequirementImageUrls(req.imageUrls)
+  )
 }
 
 function createTableColumnId(): string {
@@ -549,6 +600,7 @@ function buildNewDraft(defaults: NewRequirementDefaults, draftId: string): Requi
     testCases: [],
     iterationHistory: [],
     tableData: emptyTableData(),
+    imageUrls: [],
   }
 }
 
@@ -572,6 +624,9 @@ export function RequirementDrawer({
   const [editCategory, setEditCategory] = useState("")
   const [tableFilter, setTableFilter] = useState("all")
   const [editTableData, setEditTableData] = useState<MatrixTableData>({ columns: [], rows: [] })
+  const [editImageUrls, setEditImageUrls] = useState<string[]>([])
+  const [isUploadingGalleryImage, setIsUploadingGalleryImage] = useState(false)
+  const galleryFileInputRef = useRef<HTMLInputElement>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [newColumnTitle, setNewColumnTitle] = useState("")
   const [newColumnTags, setNewColumnTags] = useState("all")
@@ -581,6 +636,9 @@ export function RequirementDrawer({
   const [editingTagColumnId, setEditingTagColumnId] = useState<string | null>(null)
   const [editingTagValue, setEditingTagValue] = useState("")
   const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const saveInFlightRef = useRef(false)
+  const [baselineFingerprint, setBaselineFingerprint] = useState("")
 
   const resetFormState = () => {
     setIsEditing(false)
@@ -599,6 +657,11 @@ export function RequirementDrawer({
     setEditingTagColumnId(null)
     setEditingTagValue("")
     setEditingCell(null)
+    setEditImageUrls([])
+    setIsUploadingGalleryImage(false)
+    setIsSaving(false)
+    saveInFlightRef.current = false
+    setBaselineFingerprint("")
   }
 
   const newDraftSessionIdRef = useRef<string>("")
@@ -634,6 +697,7 @@ export function RequirementDrawer({
     } else {
       setEditTableData(emptyTableData())
     }
+    setEditImageUrls(normalizeRequirementImageUrls(req.imageUrls))
     setTableFilter("all")
     setEditingCell(null)
   }, [])
@@ -648,7 +712,21 @@ export function RequirementDrawer({
     if (!req) return
     hydrateFieldsFromRequirement(req)
     setIsEditing(Boolean(isNewRequirement))
+    setBaselineFingerprint(fingerprintFromRequirement(req))
   }, [open, effectiveRequirement?.id, isNewRequirement, hydrateFieldsFromRequirement])
+
+  const dirtyFingerprint = useMemo(
+    () =>
+      persistenceFingerprint(
+        editTitle,
+        editVersion,
+        editCategory || availableCategoriesRef.current[0] || "core",
+        serializeDescriptionBlocksToContent(editDescriptionBlocks),
+        editTableData,
+        editImageUrls
+      ),
+    [editTitle, editVersion, editCategory, editDescriptionBlocks, editTableData, editImageUrls]
+  )
 
   const prevOpenRef = useRef(open)
   useEffect(() => {
@@ -663,6 +741,7 @@ export function RequirementDrawer({
     const req = latestEffectiveRef.current
     if (!req) return
     hydrateFieldsFromRequirement(req)
+    setBaselineFingerprint(fingerprintFromRequirement(req))
     setEditingCell(null)
     setIsEditing(true)
   }
@@ -865,24 +944,123 @@ export function RequirementDrawer({
     setShowClipboardImport(false)
   }
 
-  const handleSave = () => {
-    if (!effectiveRequirement || !onSave) return
-    setEditingCell(null)
-    const tableToPersist = stripEmptyRowsFromTableData(editTableData)
-    setEditTableData(tableToPersist)
-    const updatedRequirement: RequirementDetail = {
-      ...effectiveRequirement,
-      title: editTitle,
-      version: editVersion,
-      category: editCategory || effectiveRequirement.category,
-      description: serializeDescriptionBlocksToContent(editDescriptionBlocks),
-      tableData: tableToPersist,
+  const removeGalleryImageAt = useCallback((index: number) => {
+    setEditImageUrls((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  const handleGalleryFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target
+    const file = input.files?.[0]
+    input.value = ""
+    if (!file) return
+    if (!file.type.startsWith("image/")) {
+      toast.error("请选择图片文件")
+      return
     }
-    onSave(updatedRequirement)
-    onOpenChange(false)
-  }
+    const req = latestEffectiveRef.current
+    if (!req) return
+    if (saveInFlightRef.current) return
+
+    setIsUploadingGalleryImage(true)
+    try {
+      const scope = storagePathScopeForRequirement(req.id)
+      const ext = (file.name.split(".").pop() ?? "jpg").replace(/[^\w]/g, "") || "jpg"
+      const objectName = `${scope}/${Date.now()}-${Math.random().toString(36).slice(2, 11)}.${ext}`
+      const { error } = await supabase.storage.from(REQUIREMENT_IMAGES_BUCKET).upload(objectName, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file.type || undefined,
+      })
+      if (error) throw error
+      const { data: pub } = supabase.storage.from(REQUIREMENT_IMAGES_BUCKET).getPublicUrl(objectName)
+      if (!pub?.publicUrl) throw new Error("无法生成图片访问地址")
+      setEditImageUrls((prev) => [...prev, pub.publicUrl])
+    } catch (err: unknown) {
+      console.error("Requirement image upload:", stringifyErrorForLog(err))
+      toast.error("上传失败", {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setIsUploadingGalleryImage(false)
+    }
+  }, [])
+
+  const performSaveAndClose = useCallback(async () => {
+    const req = latestEffectiveRef.current
+    if (!req) {
+      onOpenChange(false)
+      return
+    }
+    if (!onSave) {
+      onOpenChange(false)
+      return
+    }
+    if (saveInFlightRef.current) return
+
+    if (!editTitle.trim()) {
+      toast.error("请填写需求标题后再保存")
+      return
+    }
+
+    if (dirtyFingerprint === baselineFingerprint) {
+      onOpenChange(false)
+      return
+    }
+
+    saveInFlightRef.current = true
+    setIsSaving(true)
+    setEditingCell(null)
+    try {
+      const tableToPersist = stripEmptyRowsFromTableData(editTableData)
+      setEditTableData(tableToPersist)
+      const updatedRequirement: RequirementDetail = {
+        ...req,
+        title: editTitle.trim(),
+        version: editVersion,
+        category: editCategory || req.category,
+        description: serializeDescriptionBlocksToContent(editDescriptionBlocks),
+        tableData: tableToPersist,
+        imageUrls: normalizeRequirementImageUrls(editImageUrls),
+      }
+      await Promise.resolve(onSave(updatedRequirement))
+      onOpenChange(false)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      toast.error("保存失败", { description: msg })
+    } finally {
+      saveInFlightRef.current = false
+      setIsSaving(false)
+    }
+  }, [
+    onSave,
+    onOpenChange,
+    dirtyFingerprint,
+    baselineFingerprint,
+    editTitle,
+    editVersion,
+    editCategory,
+    editDescriptionBlocks,
+    editTableData,
+    editImageUrls,
+  ])
+
+  const handleRequirementSheetOpenChange = useCallback(
+    (next: boolean) => {
+      if (next) {
+        onOpenChange(true)
+        return
+      }
+      if (saveInFlightRef.current) {
+        toast.info("正在保存，请稍候…")
+        return
+      }
+      void performSaveAndClose()
+    },
+    [onOpenChange, performSaveAndClose]
+  )
 
   const handleDelete = () => {
+    if (saveInFlightRef.current) return
     if (!effectiveRequirement || !onDelete) return
     onDelete(effectiveRequirement.id)
     setDeleteDialogOpen(false)
@@ -894,7 +1072,7 @@ export function RequirementDrawer({
   const accessibilityTitle = effectiveRequirement.title?.trim() || "新建需求"
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleRequirementSheetOpenChange}>
       <SheetContent 
         side="right" 
         className="w-[95vw] sm:max-w-4xl overflow-y-auto p-0 border-l border-slate-200"
@@ -1159,24 +1337,78 @@ export function RequirementDrawer({
           </section>
           )}
 
-          {/* Image Section - Conditional Rendering */}
-          {effectiveRequirement.imageUrl && !isEditing && (
+          {/* 需求配图：浏览态有图才显示 */}
+          {!isEditing && normalizeRequirementImageUrls(effectiveRequirement.imageUrls).length > 0 && (
             <section>
-              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
                 <span className="w-0.5 h-3 bg-amber-500 rounded-full" />
-                示意图
+                需求配图
               </h3>
-              <div className="rounded-lg overflow-hidden border border-slate-200 bg-gradient-to-br from-slate-50 to-slate-100">
-                <div className="aspect-video flex items-center justify-center">
-                  <div className="text-center text-slate-400">
-                    <div className="w-12 h-12 mx-auto mb-2 rounded-lg bg-slate-200 flex items-center justify-center">
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    </div>
-                    <p className="text-xs">需求示意图</p>
+              <div className="grid grid-cols-2 gap-4">
+                {normalizeRequirementImageUrls(effectiveRequirement.imageUrls).map((url, i) => (
+                  <a
+                    key={`${url}-${i}`}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group block overflow-hidden rounded-lg shadow-sm ring-1 ring-slate-200/80 transition-shadow hover:shadow-md hover:ring-amber-200/60"
+                  >
+                    <img
+                      src={url}
+                      alt=""
+                      className="aspect-[4/3] w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                    />
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 需求配图：编辑态 */}
+          {isEditing && (
+            <section>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <span className="w-0.5 h-3 bg-amber-500 rounded-full" />
+                需求配图
+              </h3>
+              <input
+                ref={galleryFileInputRef}
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={handleGalleryFileChange}
+              />
+              <div className="grid grid-cols-2 gap-4">
+                {editImageUrls.map((url, idx) => (
+                  <div
+                    key={`${url}-${idx}`}
+                    className="relative aspect-[4/3] overflow-hidden rounded-lg shadow-sm ring-1 ring-slate-200/80"
+                  >
+                    <img src={url} alt="" className="h-full w-full object-cover" />
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={() => removeGalleryImageAt(idx)}
+                      className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/50 text-white shadow-sm transition-colors hover:bg-rose-600/90 disabled:opacity-40"
+                      aria-label="删除图片"
+                    >
+                      <X className="h-3.5 w-3.5" strokeWidth={2.5} />
+                    </button>
                   </div>
-                </div>
+                ))}
+                <button
+                  type="button"
+                  disabled={isSaving || isUploadingGalleryImage}
+                  onClick={() => galleryFileInputRef.current?.click()}
+                  className="flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 text-xs text-slate-500 transition-colors hover:border-amber-300 hover:bg-amber-50/50 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isUploadingGalleryImage ? (
+                    <Loader2 className="h-6 w-6 animate-spin text-amber-600" />
+                  ) : (
+                    <ImagePlus className="h-6 w-6 text-slate-400" strokeWidth={1.75} />
+                  )}
+                  <span className="font-medium text-slate-600">上传图片</span>
+                </button>
               </div>
             </section>
           )}
@@ -1554,15 +1786,10 @@ export function RequirementDrawer({
                 variant="ghost"
                 size="sm"
                 type="button"
+                disabled={isSaving}
                 onClick={() => {
-                  if (isNewRequirement) {
-                    onOpenChange(false)
-                  } else {
-                    setIsEditing(false)
-                    if (effectiveRequirement) {
-                      hydrateFieldsFromRequirement(effectiveRequirement)
-                    }
-                  }
+                  if (saveInFlightRef.current) return
+                  onOpenChange(false)
                 }}
                 className="text-xs"
               >
@@ -1570,12 +1797,22 @@ export function RequirementDrawer({
               </Button>
               <Button
                 size="sm"
-                onClick={handleSave}
-                disabled={!editTitle.trim()}
+                type="button"
+                onClick={() => void performSaveAndClose()}
+                disabled={isSaving || !editTitle.trim()}
                 className="gap-1.5 text-xs bg-slate-900 hover:bg-slate-800"
               >
-                <Save className="w-3 h-3" />
-                保存
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    保存中...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3 h-3" />
+                    保存
+                  </>
+                )}
               </Button>
             </div>
           ) : (

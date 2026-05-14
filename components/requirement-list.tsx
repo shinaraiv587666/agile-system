@@ -36,6 +36,8 @@ interface RequirementListProps {
   onPersistIterations: (requirementId: string, iterations: IterationRecord[]) => Promise<void>
   /** 持久化成功后由列表调用，用于从数据库重新拉取需求列表（含用例 / 迭代的真实 ID） */
   onRefreshRequirements: () => Promise<void>
+  /** 抽屉关闭后由列表调用，用于重置「新建需求」触发器，避免 Strict Mode / 重挂载后误弹新建抽屉 */
+  onConsumeCreateNewRequest?: () => void
 }
 
 export function RequirementList({ 
@@ -56,6 +58,7 @@ export function RequirementList({
   onPersistTestCases,
   onPersistIterations,
   onRefreshRequirements,
+  onConsumeCreateNewRequest,
 }: RequirementListProps) {
   const { showImportantOnly } = useTestCasesImportantFilter()
   const [activeCategory, setActiveCategory] = useState("all")
@@ -93,8 +96,9 @@ export function RequirementList({
     if (!next) {
       setSelectedRequirement(null)
       setIsNewRequirement(false)
+      onConsumeCreateNewRequest?.()
     }
-  }, [])
+  }, [onConsumeCreateNewRequest])
 
   const handleCardClick = useCallback((requirement: RequirementDetail) => {
     setTestDialogOpen(false)
@@ -146,19 +150,17 @@ export function RequirementList({
   const handleSaveRequirement = useCallback(async (updatedRequirement: RequirementDetail) => {
     try {
       if (isNewRequirement) {
-        // Add new requirement
         await onRequirementsChange([updatedRequirement, ...requirements])
       } else {
-        // Update existing requirement
         await onRequirementsChange(
           requirements.map(r => r.id === updatedRequirement.id ? updatedRequirement : r)
         )
       }
-      handleDrawerOpenChange(false)
     } catch (error) {
       console.error("Failed to save requirement:", error instanceof Error ? error.message : String(error))
+      throw error
     }
-  }, [isNewRequirement, requirements, onRequirementsChange, handleDrawerOpenChange])
+  }, [isNewRequirement, requirements, onRequirementsChange])
 
   const handleDeleteRequirement = useCallback(async (requirementId: string) => {
     try {
@@ -180,15 +182,16 @@ export function RequirementList({
     setDrawerOpen(true)
   }, [])
 
-  const lastCreateReq = useRef(0)
+  const lastProcessedCreateRequestId = useRef(0)
+  const handleCreateNewRef = useRef(handleCreateNew)
+  handleCreateNewRef.current = handleCreateNew
+
   useEffect(() => {
     if (!createNewRequestId) return
-    if (lastCreateReq.current === createNewRequestId) return
-    lastCreateReq.current = createNewRequestId
-    if (createNewRequestId > 0) {
-      handleCreateNew()
-    }
-  }, [createNewRequestId, handleCreateNew])
+    if (lastProcessedCreateRequestId.current === createNewRequestId) return
+    lastProcessedCreateRequestId.current = createNewRequestId
+    handleCreateNewRef.current()
+  }, [createNewRequestId])
 
   const knownCategories: Record<string, { name: string; icon: string }> = {
     core: { name: "核心功能", icon: "⚡" },

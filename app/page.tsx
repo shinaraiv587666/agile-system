@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react"
 import { Project, ProjectSidebar } from "@/components/project-sidebar"
 import { RequirementList } from "@/components/requirement-list"
 import { TestCasesImportantFilterProvider } from "@/components/test-cases-important-filter-context"
-import { MatrixTableData, RequirementDetail } from "@/components/requirement-drawer"
+import { MatrixTableData, RequirementDetail, normalizeRequirementImageUrls } from "@/components/requirement-drawer"
 import { TestCase } from "@/components/test-execution-dialog"
 import { IterationRecord } from "@/components/iteration-history-dialog"
 import { Button } from "@/components/ui/button"
@@ -253,7 +253,7 @@ export default function Home() {
         description: String((r as { content?: string }).content ?? ""),
         testCases: testMap.get(reqId) ?? [],
         iterationHistory,
-        imageUrl: (r as { image_urls?: string[] }).image_urls?.[0],
+        imageUrls: normalizeRequirementImageUrls((r as { image_urls?: unknown }).image_urls),
         tableData: safeMatrixTableData((r as { table_data?: unknown }).table_data),
       }
     })
@@ -336,7 +336,7 @@ export default function Home() {
         content: req.description,
         version: req.version ?? "",
         table_data: req.tableData ?? { columns: [], rows: [] },
-        image_urls: req.imageUrl ? [req.imageUrl] : [],
+        image_urls: normalizeRequirementImageUrls(req.imageUrls),
       }
       if (supportsProjectId && isUuid(req.projectId || selectedProjectId)) {
         payload.project_id = req.projectId || selectedProjectId
@@ -754,6 +754,7 @@ export default function Home() {
             onPersistTestCases={persistTestCases}
             onPersistIterations={persistIterations}
             onRefreshRequirements={fetchAllData}
+            onConsumeCreateNewRequest={() => setCreateNewRequestId(0)}
           />
           </TestCasesImportantFilterProvider>
           )}
