@@ -239,15 +239,19 @@ export function ProjectSidebar({
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>确认删除项目？</AlertDialogTitle>
-            <AlertDialogDescription>
-              你将删除项目「{pendingName}」。此操作不可撤销。
+            <AlertDialogTitle className="text-rose-600">数据安全警告：隐藏整个项目</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-600 space-y-2">
+              <p>
+                确定要删除项目<strong className="text-slate-900">【{pendingName}】</strong>吗？其下的<strong className="text-rose-600">所有需求将一并隐藏</strong>
+                （数据库软删除标记），列表中将不再显示，同事也无法再从界面恢复。
+              </p>
+              <p className="text-xs text-rose-600">请再次确认：只有点击右侧红色按钮才会执行该操作。</p>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={handleDelete}>
-              确认删除
+            <AlertDialogAction className="bg-rose-600 hover:bg-rose-700 text-white" onClick={handleDelete}>
+              确认隐藏项目（软删除）
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

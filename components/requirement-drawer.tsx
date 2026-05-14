@@ -1757,14 +1757,16 @@ export function RequirementDrawer({
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle className="flex items-center gap-2 text-slate-800">
-                        <Trash2 className="w-5 h-5 text-rose-500" />
-                        确认删除？
+                      <AlertDialogTitle className="flex items-center gap-2 text-rose-600">
+                        <Trash2 className="w-5 h-5" />
+                        数据安全警告：隐藏此需求
                       </AlertDialogTitle>
-                      <AlertDialogDescription className="text-slate-500">
-                        此操作将永久删除需求 &ldquo;<strong className="text-slate-700">{effectiveRequirement.title}</strong>&rdquo;，包括所有测试用例和历史记录。
-                        <br />
-                        <span className="text-rose-500 text-xs mt-2 block">此操作无法撤销。</span>
+                      <AlertDialogDescription className="text-slate-600 space-y-2">
+                        <p>
+                          确定要删除需求<strong className="text-slate-900">「{effectiveRequirement.title}」</strong>吗？该需求及其关联数据将在界面中<strong className="text-rose-600">永久隐藏</strong>
+                          （数据库软删除），列表中不再展示；测试用例与迭代记录仍保留在库中，但无法从本应用查看，直至管理员在数据库中处理。
+                        </p>
+                        <p className="text-xs text-rose-600">只有点击下方红色按钮才会执行隐藏操作。</p>
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
@@ -1773,7 +1775,7 @@ export function RequirementDrawer({
                         onClick={handleDelete}
                         className="bg-rose-600 hover:bg-rose-700 text-white"
                       >
-                        确认删除
+                        确认隐藏需求（软删除）
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>

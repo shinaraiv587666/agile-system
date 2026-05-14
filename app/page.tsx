@@ -121,6 +121,7 @@ export default function Home() {
     const { data, error } = await supabase
       .from("projects")
       .select("*")
+      .neq("is_deleted", true)
       .order("created_at", { ascending: false })
     if (error) {
       console.warn("Failed to load projects table, fallback to default list:", error.message)
@@ -159,6 +160,7 @@ export default function Home() {
         .from("requirements")
         .select("*")
         .eq("project_id", selectedProjectId)
+        .neq("is_deleted", true)
         .order("created_at", { ascending: false })
       if (error) {
         const msg = error.message || ""
@@ -168,6 +170,7 @@ export default function Home() {
           const fallback = await supabase
             .from("requirements")
             .select("*")
+            .neq("is_deleted", true)
             .order("created_at", { ascending: false })
           if (fallback.error) throw fallback.error
           reqRows = fallback.data as Record<string, unknown>[]
@@ -181,6 +184,7 @@ export default function Home() {
       const { data, error } = await supabase
         .from("requirements")
         .select("*")
+        .neq("is_deleted", true)
         .order("created_at", { ascending: false })
       if (error) throw error
       reqRows = data as Record<string, unknown>[]
@@ -298,6 +302,7 @@ export default function Home() {
           .from("requirements")
           .select("id")
           .eq("project_id", selectedProjectId)
+          .neq("is_deleted", true)
         if (error) throw error
         requirementIds = (data ?? []).map((r: { id: string }) => r.id).filter(isUuid)
       } else {
@@ -342,10 +347,11 @@ export default function Home() {
         payload.project_id = req.projectId || selectedProjectId
       }
       if (isUuid(id)) {
-        const { error } = await supabase.from("requirements").update(payload).eq("id", id)
+        const { error } = await supabase.from("requirements").update(payload).eq("id", id).neq("is_deleted", true)
         if (error) throw error
       } else {
-        const { data, error } = await supabase.from("requirements").insert(payload).select("id").single()
+        const insertPayload = { ...payload, is_deleted: false }
+        const { data, error } = await supabase.from("requirements").insert(insertPayload).select("id").single()
         if (error) throw error
         if (data?.id) req.id = data.id
       }
@@ -353,7 +359,7 @@ export default function Home() {
 
     const deletedIds = requirements.filter(r => !nextMap.has(r.id) && isUuid(r.id)).map(r => r.id)
     if (deletedIds.length > 0) {
-      const { error } = await supabase.from("requirements").delete().in("id", deletedIds)
+      const { error } = await supabase.from("requirements").update({ is_deleted: true }).in("id", deletedIds)
       if (error) throw error
     }
 
@@ -520,7 +526,7 @@ export default function Home() {
       setSelectedProjectId(localProject.id)
       return
     }
-    const payload = { name, categories: ["core"] }
+    const payload = { name, categories: ["core"], is_deleted: false }
     const { data, error } = await supabase.from("projects").insert(payload).select("id,name,categories").single()
     if (error) {
       logSupabaseError("Create project failed", error)
@@ -543,7 +549,7 @@ export default function Home() {
       setProjects(prev => prev.map(p => (p.id === id ? { ...p, name } : p)))
       return
     }
-    const { error } = await supabase.from("projects").update({ name }).eq("id", id)
+    const { error } = await supabase.from("projects").update({ name }).eq("id", id).neq("is_deleted", true)
     if (error) {
       logSupabaseError("Rename project failed", error)
       return
@@ -565,9 +571,34 @@ export default function Home() {
       })
       return
     }
-    const { error } = await supabase.from("projects").delete().eq("id", id)
-    if (error) {
-      logSupabaseError("Delete project failed", error)
+    try {
+      const { data: childReqs, error: listErr } = await supabase
+        .from("requirements")
+        .select("id")
+        .eq("project_id", id)
+        .neq("is_deleted", true)
+      if (listErr) {
+        logSupabaseError("List requirements for project soft-delete failed", listErr)
+        return
+      }
+      const childIds = (childReqs ?? []).map((r: { id: string }) => r.id).filter(isUuid)
+      if (childIds.length > 0) {
+        const { error: softReqErr } = await supabase
+          .from("requirements")
+          .update({ is_deleted: true })
+          .in("id", childIds)
+        if (softReqErr) {
+          logSupabaseError("Soft-delete requirements for project failed", softReqErr)
+          return
+        }
+      }
+      const { error: softProjErr } = await supabase.from("projects").update({ is_deleted: true }).eq("id", id)
+      if (softProjErr) {
+        logSupabaseError("Soft-delete project failed", softProjErr)
+        return
+      }
+    } catch (e) {
+      logSupabaseError("Delete project failed", e)
       return
     }
     setProjects(prev => {
@@ -589,7 +620,7 @@ export default function Home() {
     const safe = normalized.length > 0 ? normalized : ["core"]
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, categories: safe } : p)))
     if (projectsDbEnabled && isUuid(projectId)) {
-      const { error } = await supabase.from("projects").update({ categories: safe }).eq("id", projectId)
+      const { error } = await supabase.from("projects").update({ categories: safe }).eq("id", projectId).neq("is_deleted", true)
       if (error) logSupabaseError("Update categories failed", error)
     }
   }, [projectsDbEnabled])
@@ -608,7 +639,11 @@ export default function Home() {
     setRequirements((prev) => prev.map((req) => (req.category === oldName ? { ...req, category: newName } : req)))
     const ids = requirements.filter((req) => req.category === oldName && isUuid(req.id)).map((req) => req.id)
     if (ids.length > 0) {
-      const { error } = await supabase.from("requirements").update({ category: newName }).in("id", ids)
+      const { error } = await supabase
+        .from("requirements")
+        .update({ category: newName })
+        .in("id", ids)
+        .neq("is_deleted", true)
       if (error) logSupabaseError("Rename category in requirements failed", error)
     }
   }, [activeCategories, requirements, selectedProjectId, syncProjectCategories])
@@ -621,7 +656,11 @@ export default function Home() {
     setRequirements((prev) => prev.map((req) => (req.category === name ? { ...req, category: fallback } : req)))
     const ids = requirements.filter((req) => req.category === name && isUuid(req.id)).map((req) => req.id)
     if (ids.length > 0) {
-      const { error } = await supabase.from("requirements").update({ category: fallback }).in("id", ids)
+      const { error } = await supabase
+        .from("requirements")
+        .update({ category: fallback })
+        .in("id", ids)
+        .neq("is_deleted", true)
       if (error) logSupabaseError("Delete category remap requirements failed", error)
     }
   }, [activeCategories, selectedProjectId, syncProjectCategories])
