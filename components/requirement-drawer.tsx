@@ -1761,12 +1761,14 @@ export function RequirementDrawer({
                         <Trash2 className="w-5 h-5" />
                         数据安全警告：隐藏此需求
                       </AlertDialogTitle>
-                      <AlertDialogDescription className="text-slate-600 space-y-2">
-                        <p>
-                          确定要删除需求<strong className="text-slate-900">「{effectiveRequirement.title}」</strong>吗？该需求及其关联数据将在界面中<strong className="text-rose-600">永久隐藏</strong>
-                          （数据库软删除），列表中不再展示；测试用例与迭代记录仍保留在库中，但无法从本应用查看，直至管理员在数据库中处理。
-                        </p>
-                        <p className="text-xs text-rose-600">只有点击下方红色按钮才会执行隐藏操作。</p>
+                      <AlertDialogDescription className="text-slate-600">
+                        <div className="space-y-2">
+                          <div>
+                            确定要删除需求<strong className="text-slate-900">「{effectiveRequirement.title}」</strong>吗？该需求及其关联数据将在界面中<strong className="text-rose-600">永久隐藏</strong>
+                            （数据库软删除），列表中不再展示；测试用例与迭代记录仍保留在库中，但无法从本应用查看，直至管理员在数据库中处理。
+                          </div>
+                          <div className="text-xs text-rose-600">只有点击下方红色按钮才会执行隐藏操作。</div>
+                        </div>
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

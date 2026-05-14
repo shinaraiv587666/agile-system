@@ -20,7 +20,8 @@ import {
   Search, 
   Plus, 
   Filter,
-  RotateCcw
+  RotateCcw,
+  Inbox,
 } from "lucide-react"
 import {
   AlertDialog,
@@ -106,7 +107,7 @@ const PROJECT_COLOR_POOL = [
 export default function Home() {
   const [selectedProjectId, setSelectedProjectId] = useState("")
   const [projects, setProjects] = useState<Project[]>([])
-  const [projectsDbEnabled, setProjectsDbEnabled] = useState(false)
+  const [projectsLoading, setProjectsLoading] = useState(true)
   const [completedRequirements, setCompletedRequirements] = useState<Set<string>>(new Set())
   const [resetDialogOpen, setResetDialogOpen] = useState(false)
   const [requirements, setRequirements] = useState<RequirementDetail[]>([])
@@ -118,36 +119,46 @@ export default function Home() {
   const [visibleRequirementCount, setVisibleRequirementCount] = useState(0)
 
   const fetchProjects = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("projects")
-      .select("*")
-      .neq("is_deleted", true)
-      .order("created_at", { ascending: false })
-    if (error) {
-      console.warn("Failed to load projects table, fallback to default list:", error.message)
-      const fallback = [{ id: "default", name: "默认项目", color: "bg-sky-500", requirementsCount: 0, categories: ["core"] }]
-      setProjects(fallback)
-      setProjectsDbEnabled(false)
-      setSelectedProjectId(prev => prev || fallback[0].id)
-      return
+    setProjectsLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from("projects")
+        .select("*")
+        .neq("is_deleted", true)
+        .order("created_at", { ascending: false })
+      if (error) {
+        logSupabaseError("Failed to load projects", error)
+        setProjects([])
+        setSelectedProjectId("")
+        return
+      }
+      const mapped: Project[] = (data ?? []).map((project, index) => ({
+        id: String(project.id),
+        name: String(project.name ?? `项目 ${index + 1}`),
+        color: PROJECT_COLOR_POOL[index % PROJECT_COLOR_POOL.length],
+        requirementsCount: 0,
+        categories: normalizeCategories((project as { categories?: unknown }).categories),
+      }))
+      setProjects(mapped)
+      setSelectedProjectId((prev) => {
+        if (mapped.length === 0) return ""
+        const ids = new Set(mapped.map((p) => p.id))
+        if (prev && ids.has(prev)) return prev
+        return mapped[0].id
+      })
+    } finally {
+      setProjectsLoading(false)
     }
-    const mapped: Project[] = (data ?? []).map((project, index) => ({
-      id: String(project.id),
-      name: String(project.name ?? `项目 ${index + 1}`),
-      color: PROJECT_COLOR_POOL[index % PROJECT_COLOR_POOL.length],
-      requirementsCount: 0,
-      categories: normalizeCategories((project as { categories?: unknown }).categories),
-    }))
-    const safeProjects = mapped.length > 0
-      ? mapped
-      : [{ id: "default", name: "默认项目", color: "bg-sky-500", requirementsCount: 0, categories: ["core"] }]
-    setProjects(safeProjects)
-    setProjectsDbEnabled(true)
-    setSelectedProjectId(prev => prev || safeProjects[0].id)
   }, [])
 
   const fetchAllData = useCallback(async () => {
     if (!selectedProjectId) {
+      setRequirements([])
+      setCompletedRequirements(new Set())
+      setLoading(false)
+      return
+    }
+    if (supportsProjectId && !isUuid(selectedProjectId)) {
       setRequirements([])
       setCompletedRequirements(new Set())
       setLoading(false)
@@ -291,6 +302,23 @@ export default function Home() {
       setLoading(false)
     })
   }, [fetchAllData])
+
+  useEffect(() => {
+    if (projectsLoading) return
+    if (projects.length === 0) return
+    if (!selectedProjectId || !projects.some((p) => p.id === selectedProjectId)) {
+      setSelectedProjectId(projects[0].id)
+    }
+  }, [projectsLoading, projects, selectedProjectId])
+
+  useEffect(() => {
+    const ready =
+      Boolean(selectedProjectId && isUuid(selectedProjectId)) &&
+      projects.some((p) => p.id === selectedProjectId)
+    if (!ready) {
+      setVisibleRequirementCount(0)
+    }
+  }, [selectedProjectId, projects])
 
   const handleResetAllTests = async () => {
     try {
@@ -514,18 +542,6 @@ export default function Home() {
   }, [requirements])
 
   const handleCreateProject = useCallback(async (name: string) => {
-    if (!projectsDbEnabled) {
-      const localProject: Project = {
-        id: `local-${Date.now()}`,
-        name,
-        color: PROJECT_COLOR_POOL[(projects.length + 1) % PROJECT_COLOR_POOL.length],
-        requirementsCount: 0,
-        categories: ["core"],
-      }
-      setProjects(prev => [localProject, ...prev])
-      setSelectedProjectId(localProject.id)
-      return
-    }
     const payload = { name, categories: ["core"], is_deleted: false }
     const { data, error } = await supabase.from("projects").insert(payload).select("id,name,categories").single()
     if (error) {
@@ -539,29 +555,24 @@ export default function Home() {
       requirementsCount: 0,
       categories: normalizeCategories((data as { categories?: unknown }).categories),
     }
-    setProjects(prev => [newProject, ...prev])
+    setProjects((prev) => [newProject, ...prev])
     setSelectedProjectId(newProject.id)
-  }, [projects.length, projectsDbEnabled])
+  }, [projects.length])
 
   const handleRenameProject = useCallback(async (id: string, name: string) => {
-    if (id === "default") return
-    if (!projectsDbEnabled) {
-      setProjects(prev => prev.map(p => (p.id === id ? { ...p, name } : p)))
-      return
-    }
+    if (!isUuid(id)) return
     const { error } = await supabase.from("projects").update({ name }).eq("id", id).neq("is_deleted", true)
     if (error) {
       logSupabaseError("Rename project failed", error)
       return
     }
-    setProjects(prev => prev.map(p => (p.id === id ? { ...p, name } : p)))
-  }, [projectsDbEnabled])
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)))
+  }, [])
 
   const handleDeleteProject = useCallback(async (id: string) => {
-    if (id === "default") return
-    if (!projectsDbEnabled) {
-      setProjects(prev => {
-        const next = prev.filter(p => p.id !== id)
+    if (!isUuid(id)) {
+      setProjects((prev) => {
+        const next = prev.filter((p) => p.id !== id)
         if (next.length > 0 && selectedProjectId === id) {
           setSelectedProjectId(next[0].id)
         } else if (next.length === 0) {
@@ -610,20 +621,23 @@ export default function Home() {
       }
       return next
     })
-  }, [projectsDbEnabled, selectedProjectId])
+  }, [selectedProjectId])
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId)
   const activeCategories = selectedProject?.categories ?? ["core"]
+  const requirementUiReady =
+    Boolean(selectedProjectId && isUuid(selectedProjectId)) &&
+    projects.some((p) => p.id === selectedProjectId)
 
   const syncProjectCategories = useCallback(async (projectId: string, categories: string[]) => {
     const normalized = Array.from(new Set(categories.map((x) => x.trim()).filter(Boolean)))
     const safe = normalized.length > 0 ? normalized : ["core"]
     setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, categories: safe } : p)))
-    if (projectsDbEnabled && isUuid(projectId)) {
+    if (isUuid(projectId)) {
       const { error } = await supabase.from("projects").update({ categories: safe }).eq("id", projectId).neq("is_deleted", true)
       if (error) logSupabaseError("Update categories failed", error)
     }
-  }, [projectsDbEnabled])
+  }, [])
 
   const handleAddCategory = useCallback(async (name: string) => {
     if (!selectedProjectId) return
@@ -672,6 +686,7 @@ export default function Home() {
         selectedProjectId={selectedProjectId}
         onSelectProject={setSelectedProjectId}
         projects={projects}
+        projectsLoading={projectsLoading}
         onCreateProject={handleCreateProject}
         onRenameProject={handleRenameProject}
         onDeleteProject={handleDeleteProject}
@@ -687,13 +702,15 @@ export default function Home() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索需求点..." 
-              className="pl-8 h-8 text-xs bg-slate-50 border-slate-200 focus:bg-white transition-colors"
+              disabled={!requirementUiReady}
+              className="pl-8 h-8 text-xs bg-slate-50 border-slate-200 focus:bg-white transition-colors disabled:opacity-50"
             />
           </div>
           <div className="flex items-center gap-1.5 h-8 text-xs border rounded-md px-2 border-slate-200 bg-white text-slate-600">
             <Filter className="w-3 h-3" />
             <Select
               value={statusFilter}
+              disabled={!requirementUiReady}
               onValueChange={(value) =>
                 setStatusFilter(value as "all" | "completed" | "incomplete" | "noTest")
               }
@@ -723,7 +740,7 @@ export default function Home() {
                 variant="outline" 
                 size="sm" 
                 className="gap-1.5 h-8 text-xs border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 transition-colors"
-              disabled={!selectedProjectId}
+              disabled={!requirementUiReady}
               >
                 <RotateCcw className="w-3 h-3" />
                 重置测试
@@ -741,9 +758,12 @@ export default function Home() {
                   确认重置所有测试？
                 </AlertDialogTitle>
                 <AlertDialogDescription className="text-slate-500">
-                  此操作将把<strong className="text-slate-700">当前项目</strong>下所有测试用例的勾选状态强制清空为未勾选。
-                  <br />
-                  <span className="text-rose-500 text-xs mt-2 block">此操作无法撤销。</span>
+                  <div className="space-y-2">
+                    <div>
+                      此操作将把<strong className="text-slate-700">当前项目</strong>下所有测试用例的勾选状态强制清空为未勾选。
+                    </div>
+                    <div className="text-rose-500 text-xs">此操作无法撤销。</div>
+                  </div>
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -762,7 +782,8 @@ export default function Home() {
           <Button 
             size="sm" 
             onClick={handleCreateNew}
-            className="bg-slate-900 hover:bg-slate-800 text-white gap-1.5 shadow-sm h-8 text-xs"
+            disabled={!requirementUiReady}
+            className="bg-slate-900 hover:bg-slate-800 text-white gap-1.5 shadow-sm h-8 text-xs disabled:opacity-50"
           >
             <Plus className="w-3 h-3" />
             新建需求
@@ -771,31 +792,42 @@ export default function Home() {
 
         {/* Content Area with Tabs and Grid */}
         <div className="flex-1 overflow-y-auto p-5">
-          {loading ? (
+          {projectsLoading ? (
+            <div className="text-sm text-slate-500">正在加载项目列表…</div>
+          ) : !requirementUiReady ? (
+            <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] gap-4 text-center px-6">
+              <Inbox className="w-14 h-14 text-slate-300" strokeWidth={1.25} aria-hidden />
+              <p className="text-sm text-slate-600 max-w-sm">
+                {projects.length === 0
+                  ? "当前还没有任何项目。请先在左侧点击「新建项目」创建第一个项目，再在此管理需求。"
+                  : "正在准备项目视图…"}
+              </p>
+            </div>
+          ) : loading ? (
             <div className="text-sm text-slate-500">正在从 Supabase 加载数据...</div>
           ) : (
-          <TestCasesImportantFilterProvider>
-            <RequirementList 
-            projectId={selectedProjectId}
-            projectCategories={activeCategories}
-            completedRequirements={completedRequirements}
-            onCompletedChange={setCompletedRequirements}
-            onCreateNew={handleCreateNew}
-            createNewRequestId={createNewRequestId}
-            searchQuery={searchQuery}
-            statusFilter={statusFilter}
-            requirements={requirements}
-            onAddCategory={handleAddCategory}
-            onRenameCategory={handleRenameCategory}
-            onDeleteCategory={handleDeleteCategory}
-            onVisibleCountChange={setVisibleRequirementCount}
-            onRequirementsChange={persistRequirementList}
-            onPersistTestCases={persistTestCases}
-            onPersistIterations={persistIterations}
-            onRefreshRequirements={fetchAllData}
-            onConsumeCreateNewRequest={() => setCreateNewRequestId(0)}
-          />
-          </TestCasesImportantFilterProvider>
+            <TestCasesImportantFilterProvider>
+              <RequirementList
+                projectId={selectedProjectId}
+                projectCategories={activeCategories}
+                completedRequirements={completedRequirements}
+                onCompletedChange={setCompletedRequirements}
+                onCreateNew={handleCreateNew}
+                createNewRequestId={createNewRequestId}
+                searchQuery={searchQuery}
+                statusFilter={statusFilter}
+                requirements={requirements}
+                onAddCategory={handleAddCategory}
+                onRenameCategory={handleRenameCategory}
+                onDeleteCategory={handleDeleteCategory}
+                onVisibleCountChange={setVisibleRequirementCount}
+                onRequirementsChange={persistRequirementList}
+                onPersistTestCases={persistTestCases}
+                onPersistIterations={persistIterations}
+                onRefreshRequirements={fetchAllData}
+                onConsumeCreateNewRequest={() => setCreateNewRequestId(0)}
+              />
+            </TestCasesImportantFilterProvider>
           )}
         </div>
       </main>

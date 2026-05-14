@@ -42,6 +42,8 @@ interface ProjectSidebarProps {
   selectedProjectId: string
   onSelectProject: (id: string) => void
   projects: Project[]
+  /** 首次从 Supabase 拉取项目列表时为 true */
+  projectsLoading?: boolean
   onCreateProject: (name: string) => Promise<void>
   onRenameProject: (id: string, name: string) => Promise<void>
   onDeleteProject: (id: string) => Promise<void>
@@ -51,6 +53,7 @@ export function ProjectSidebar({
   selectedProjectId,
   onSelectProject,
   projects,
+  projectsLoading = false,
   onCreateProject,
   onRenameProject,
   onDeleteProject,
@@ -119,8 +122,24 @@ export function ProjectSidebar({
           </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
-          {projects.map((project) => (
+        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1 min-h-0">
+          {projectsLoading ? (
+            <p className="text-xs text-slate-500 text-center py-8 px-2">加载中…</p>
+          ) : projects.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-4 py-10 px-3 text-center">
+              <p className="text-sm text-slate-400 leading-relaxed">暂无项目</p>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => setCreateOpen(true)}
+                className="w-full max-w-[200px] gap-2 bg-sky-600 text-white hover:bg-sky-500 shadow-md shadow-sky-950/20"
+              >
+                <Plus className="w-4 h-4" />
+                新建项目
+              </Button>
+            </div>
+          ) : (
+            projects.map((project) => (
             <button
               key={project.id}
               onClick={() => onSelectProject(project.id)}
@@ -196,7 +215,8 @@ export function ProjectSidebar({
                   : "opacity-0 -translate-x-2"
               )} />
             </button>
-          ))}
+            ))
+          )}
         </div>
       </div>
 
@@ -240,12 +260,14 @@ export function ProjectSidebar({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="text-rose-600">数据安全警告：隐藏整个项目</AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-600 space-y-2">
-              <p>
-                确定要删除项目<strong className="text-slate-900">【{pendingName}】</strong>吗？其下的<strong className="text-rose-600">所有需求将一并隐藏</strong>
-                （数据库软删除标记），列表中将不再显示，同事也无法再从界面恢复。
-              </p>
-              <p className="text-xs text-rose-600">请再次确认：只有点击右侧红色按钮才会执行该操作。</p>
+            <AlertDialogDescription className="text-slate-600">
+              <div className="space-y-2">
+                <div>
+                  确定要删除项目<strong className="text-slate-900">【{pendingName}】</strong>吗？其下的<strong className="text-rose-600">所有需求将一并隐藏</strong>
+                  （数据库软删除标记），列表中将不再显示，同事也无法再从界面恢复。
+                </div>
+                <div className="text-xs text-rose-600">请再次确认：只有点击右侧红色按钮才会执行该操作。</div>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

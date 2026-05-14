@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useCallback, useEffect, useRef } from "react"
+import { Inbox, Plus } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { RequirementCard } from "@/components/requirement-card"
 import { CategoryTabs, Category } from "@/components/category-tabs"
 import {
@@ -238,49 +240,68 @@ export function RequirementList({
   }, [onPersistIterations, onRefreshRequirements])
 
   return (
-    <div className="space-y-4">
-      {/* Category Tabs */}
-      <CategoryTabs 
-        categories={categoriesWithCounts}
-        activeId={activeCategory}
-        onSelect={setActiveCategory}
-        onAddCategory={onAddCategory}
-        onRenameCategory={onRenameCategory}
-        onDeleteCategory={onDeleteCategory}
-      />
-
-      {/* Requirements Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 animate-in fade-in duration-300">
-        {visibleRequirements.map((requirement, index) => (
-          <RequirementCard 
-            key={requirement.id} 
-            requirement={{
-              id: requirement.id,
-              title: requirement.title,
-              status: requirement.status,
-              iterations: requirement.iterations,
-            }} 
-            index={index}
-            onClick={() => handleCardClick(requirement)}
-            onTestClick={() => handleTestIconClick(requirement)}
-            onIterationClick={() => handleIterationClick(requirement)}
-            testPhase={deriveRequirementCardTestPhase(requirement.testCases, showImportantOnly)}
-            iterationCount={requirement.iterationHistory.length}
-          />
-        ))}
-      </div>
-
-      {/* Empty state */}
-      {visibleRequirements.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-          <span className="text-3xl mb-2">📭</span>
-          <p className="text-sm">该分类下暂无需求</p>
-          <button 
+    <>
+      {requirements.length === 0 ? (
+        <div className="flex flex-col items-center justify-center min-h-[min(520px,calc(100vh-11rem))] gap-5 px-6 text-center rounded-xl border border-dashed border-slate-200 bg-white/60">
+          <Inbox className="w-20 h-20 text-slate-300" strokeWidth={1} aria-hidden />
+          <p className="text-base text-slate-600 font-medium">该项目下暂无需求</p>
+          <p className="text-xs text-slate-400 max-w-xs">创建第一条需求后即可在此查看卡片、配置测试用例与迭代记录。</p>
+          <Button
+            type="button"
             onClick={handleCreateNew}
-            className="mt-3 text-xs text-sky-500 hover:text-sky-600 transition-colors"
+            className="gap-2 bg-slate-900 text-white hover:bg-slate-800 shadow-sm"
           >
-            点击新建需求
-          </button>
+            <Plus className="w-4 h-4" />
+            新建需求
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Category Tabs */}
+          <CategoryTabs 
+            categories={categoriesWithCounts}
+            activeId={activeCategory}
+            onSelect={setActiveCategory}
+            onAddCategory={onAddCategory}
+            onRenameCategory={onRenameCategory}
+            onDeleteCategory={onDeleteCategory}
+          />
+
+          {/* Requirements Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 animate-in fade-in duration-300">
+            {visibleRequirements.map((requirement, index) => (
+              <RequirementCard 
+                key={requirement.id} 
+                requirement={{
+                  id: requirement.id,
+                  title: requirement.title,
+                  status: requirement.status,
+                  iterations: requirement.iterations,
+                }} 
+                index={index}
+                onClick={() => handleCardClick(requirement)}
+                onTestClick={() => handleTestIconClick(requirement)}
+                onIterationClick={() => handleIterationClick(requirement)}
+                testPhase={deriveRequirementCardTestPhase(requirement.testCases, showImportantOnly)}
+                iterationCount={requirement.iterationHistory.length}
+              />
+            ))}
+          </div>
+
+          {/* Empty state (filters / category) */}
+          {visibleRequirements.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+              <span className="text-3xl mb-2">📭</span>
+              <p className="text-sm">该分类下暂无需求</p>
+              <button 
+                type="button"
+                onClick={handleCreateNew}
+                className="mt-3 text-xs text-sky-500 hover:text-sky-600 transition-colors"
+              >
+                点击新建需求
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -290,7 +311,7 @@ export function RequirementList({
         open={drawerOpen}
         availableCategories={projectCategories.length > 0 ? projectCategories : ["core"]}
         newRequirementDefaults={{
-          projectId: projectId || "default",
+          projectId,
           category: activeCategory === "all" ? (projectCategories[0] || "core") : activeCategory,
         }}
         onOpenChange={handleDrawerOpenChange}
@@ -328,6 +349,6 @@ export function RequirementList({
         iterations={iterationRequirement?.iterationHistory ?? []}
         onCommitIterations={handleCommitIterations}
       />
-    </div>
+    </>
   )
 }
