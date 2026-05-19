@@ -48,10 +48,13 @@ export function IterationHistoryDialog({
   const snapshot = (rows: IterationRecord[]) =>
     JSON.stringify(rows.map((r) => ({ id: r.id, version: r.version, changes: r.changes })))
   const [initialSnapshot, setInitialSnapshot] = useState<string>(snapshot(iterations))
-  const hasUnsavedChanges = useMemo(
-    () => snapshot(localIterations) !== initialSnapshot,
-    [localIterations, initialSnapshot]
-  )
+  const commitSessionRef = useRef(0)
+  const saveInFlightRef = useRef(false)
+  const isCancelingRef = useRef(false)
+
+  useEffect(() => {
+    saveInFlightRef.current = isSavingOnClose
+  }, [isSavingOnClose])
 
   // 抽屉打开时按外部迭代记录内容强制同步（指纹避免仅数组引用不变时漏刷新）
   const externalIterationsFingerprint = snapshot(iterations)
@@ -63,6 +66,29 @@ export function IterationHistoryDialog({
     setIsAdding(false)
     setAddForm({ version: "", changes: "" })
   }, [open, externalIterationsFingerprint])
+
+  useEffect(() => {
+    if (!open) {
+      commitSessionRef.current += 1
+    }
+  }, [open])
+
+  const localIterationsRef = useRef(localIterations)
+  const initialSnapshotRef = useRef(initialSnapshot)
+  useEffect(() => {
+    localIterationsRef.current = localIterations
+    initialSnapshotRef.current = initialSnapshot
+  }, [localIterations, initialSnapshot])
+
+  const isDirty = useMemo(
+    () => snapshot(localIterations) !== initialSnapshot,
+    [localIterations, initialSnapshot]
+  )
+
+  const isDirtyRef = useRef(isDirty)
+  useEffect(() => {
+    isDirtyRef.current = isDirty
+  }, [isDirty])
 
   const handleEdit = (record: IterationRecord) => {
     setEditingId(record.id)
@@ -99,65 +125,14 @@ export function IterationHistoryDialog({
     setAddForm({ version: "", changes: "" })
   }
 
-  useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!open || !hasUnsavedChanges) return
-      e.preventDefault()
-      e.returnValue = "您有未保存的更改，确定要离开吗？"
-    }
-    window.addEventListener("beforeunload", onBeforeUnload)
-    return () => window.removeEventListener("beforeunload", onBeforeUnload)
-  }, [open, hasUnsavedChanges])
-
-  const localIterationsRef = useRef(localIterations)
-  const initialSnapshotRef = useRef(initialSnapshot)
-  useEffect(() => {
-    localIterationsRef.current = localIterations
-    initialSnapshotRef.current = initialSnapshot
-  }, [localIterations, initialSnapshot])
-
-  const performDismiss = useCallback(() => {
-    const rid = requirementId
-    const rowsCopy = localIterationsRef.current.map((r) => ({ ...r }))
-    const dirty = snapshot(rowsCopy) !== initialSnapshotRef.current
-
-    if (dirty) {
-      const ok = window.confirm(
-        "有未保存的更改。确定关闭？将尝试在后台自动保存；若失败会弹出提示，您可稍后重新打开再试。"
-      )
-      if (!ok) return
-    }
-
+  const performDiscardAndClose = useCallback(() => {
+    commitSessionRef.current += 1
     onOpenChange(false)
+  }, [onOpenChange])
 
-    if (dirty && rid && onCommitIterations) {
-      void Promise.resolve(onCommitIterations(rid, rowsCopy)).catch((err: unknown) => {
-        console.error("Iteration history background save failed:", stringifyErrorForLog(err))
-        toast.error("保存失败", {
-          description: supabaseErrorMessage(err),
-        })
-      })
-    }
-  }, [requirementId, onOpenChange, onCommitIterations])
-
-  const handleSheetOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) {
-        onOpenChange(true)
-        return
-      }
-      performDismiss()
-    },
-    [onOpenChange, performDismiss]
-  )
-
-  const handleSaveAndClose = useCallback(async () => {
+  const performSaveAndClose = useCallback(async () => {
     if (!requirementId) {
       toast.error("无法保存", { description: "缺少需求 ID" })
-      onOpenChange(false)
-      return
-    }
-    if (!hasUnsavedChanges) {
       onOpenChange(false)
       return
     }
@@ -165,10 +140,22 @@ export function IterationHistoryDialog({
       onOpenChange(false)
       return
     }
+    if (saveInFlightRef.current) return
+
+    if (!isDirtyRef.current) {
+      onOpenChange(false)
+      return
+    }
+
+    const rowsCopy = localIterationsRef.current.map((r) => ({ ...r }))
+    const sessionAtStart = commitSessionRef.current
     setIsSavingOnClose(true)
     try {
-      await onCommitIterations(requirementId, localIterations)
-      setInitialSnapshot(snapshot(localIterations))
+      await onCommitIterations(requirementId, rowsCopy)
+      if (commitSessionRef.current !== sessionAtStart) {
+        return
+      }
+      setInitialSnapshot(snapshot(rowsCopy))
       onOpenChange(false)
     } catch (err: unknown) {
       console.error("Iteration history save failed:", stringifyErrorForLog(err))
@@ -178,13 +165,48 @@ export function IterationHistoryDialog({
     } finally {
       setIsSavingOnClose(false)
     }
-  }, [requirementId, hasUnsavedChanges, localIterations, onCommitIterations, onOpenChange])
+  }, [requirementId, onCommitIterations, onOpenChange])
+
+  const handleCancel = useCallback(() => {
+    if (saveInFlightRef.current) return
+    isCancelingRef.current = true
+    onOpenChange(false)
+  }, [onOpenChange])
+
+  const handleSheetOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        isCancelingRef.current = false
+        onOpenChange(true)
+        return
+      }
+      if (isCancelingRef.current) {
+        isCancelingRef.current = false
+        performDiscardAndClose()
+        return
+      }
+      if (saveInFlightRef.current) {
+        toast.info("正在保存，请稍候…")
+        return
+      }
+      if (!isDirtyRef.current) {
+        onOpenChange(false)
+        return
+      }
+      void performSaveAndClose()
+    },
+    [onOpenChange, performDiscardAndClose, performSaveAndClose]
+  )
+
+  const handleSaveAndClose = useCallback(() => {
+    void performSaveAndClose()
+  }, [performSaveAndClose])
 
   return (
     <Sheet open={open} onOpenChange={handleSheetOpenChange}>
       <SheetContent
         side="right"
-        className={cn("w-[95vw] sm:max-w-4xl p-0 overflow-hidden flex flex-col", isSavingOnClose && "opacity-90")}
+        className={cn("w-[95vw] sm:max-w-4xl p-0 overflow-hidden flex flex-col", isSavingOnClose && isDirty && "opacity-90")}
       >
         <SheetHeader className="pb-4 border-b border-slate-100 shrink-0">
           <SheetTitle className="sr-only">{title || "迭代历史"}</SheetTitle>
@@ -207,7 +229,7 @@ export function IterationHistoryDialog({
                   新增记录
                 </Button>
               )}
-              {isSavingOnClose && (
+              {isSavingOnClose && isDirty && (
                 <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   保存中...
@@ -422,16 +444,16 @@ export function IterationHistoryDialog({
             variant="outline"
             size="sm"
             className="h-9"
-            onClick={performDismiss}
+            onClick={handleCancel}
           >
-            关闭
+            取消
           </Button>
           <Button
             type="button"
             size="sm"
             className="h-9 gap-1.5 bg-slate-900 hover:bg-slate-800 text-white"
-            disabled={isSavingOnClose || !hasUnsavedChanges || !onCommitIterations}
-            onClick={() => void handleSaveAndClose()}
+            disabled={isSavingOnClose || !onCommitIterations}
+            onClick={handleSaveAndClose}
           >
             {isSavingOnClose ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
             保存并关闭

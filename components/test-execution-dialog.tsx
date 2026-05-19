@@ -138,6 +138,16 @@ function allocateNextCaseNo(existing: TestCase[]): string {
 /**
  * 保存前自检：空编号、重复编号改为唯一值（空 → TC-01 递增；与已占用冲突 → base-1、base-2 …）
  */
+/** 按 case_no 自然排序（TC_2 在 TC_10 前） */
+function sortTestCasesByCaseNo(cases: TestCase[]): TestCase[] {
+  return [...cases].sort((a, b) =>
+    String(a.number ?? "").localeCompare(String(b.number ?? ""), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    })
+  )
+}
+
 function dedupeCaseNumbersForPersist(cases: TestCase[]): TestCase[] {
   const used = new Set<string>()
   const out: TestCase[] = []
@@ -207,10 +217,11 @@ export function TestExecutionDialog({
   const [isSavingOnClose, setIsSavingOnClose] = useState(false)
   /** 丢弃关闭时递增，使 await 返回后的保存流程不再关窗/改快照 */
   const commitSessionRef = useRef(0)
-  const isSavingOnCloseRef = useRef(false)
+  const saveInFlightRef = useRef(false)
+  const isCancelingRef = useRef(false)
 
   useEffect(() => {
-    isSavingOnCloseRef.current = isSavingOnClose
+    saveInFlightRef.current = isSavingOnClose
   }, [isSavingOnClose])
 
   // Store onAllComplete in a ref to avoid triggering effects on callback change
@@ -240,18 +251,26 @@ export function TestExecutionDialog({
   const externalCasesFingerprint = snapshotCases(testCases)
   useEffect(() => {
     if (!open) return
-    setLocalCases(testCases.map((tc) => ({ ...tc, isImportant: Boolean(tc.isImportant) })))
-    setInitialSnapshot(snapshotCases(testCases))
+    const sorted = sortTestCasesByCaseNo(
+      testCases.map((tc) => ({ ...tc, isImportant: Boolean(tc.isImportant) }))
+    )
+    setLocalCases(sorted)
+    setInitialSnapshot(snapshotCases(sorted))
     setIsAdding(false)
     setIsBulkPasting(false)
     setBulkPasteText("")
     setEditingId(null)
   }, [open, requirementId, externalCasesFingerprint])
 
-  const hasUnsavedChanges = useMemo(
-    () => snapshotCases(localCases) !== initialSnapshot,
+  const isDirty = useMemo(
+    () => snapshotCases(sortTestCasesByCaseNo(localCases)) !== initialSnapshot,
     [localCases, initialSnapshot]
   )
+
+  const isDirtyRef = useRef(isDirty)
+  useEffect(() => {
+    isDirtyRef.current = isDirty
+  }, [isDirty])
 
   // Derive completion status using useMemo (NOT useState + useEffect)
   const showCompletionBanner = useMemo(() => {
@@ -313,7 +332,7 @@ export function TestExecutionDialog({
     const updated = localCases.map(tc =>
       tc.id === editingId ? { ...tc, ...editForm } : tc
     )
-    setLocalCases(updated)
+    setLocalCases(sortTestCasesByCaseNo(updated))
     setEditingId(null)
   }
 
@@ -336,7 +355,7 @@ export function TestExecutionDialog({
       checked: false,
       isImportant: false,
     }
-    const updated = [...localCases, newCase]
+    const updated = sortTestCasesByCaseNo([...localCases, newCase])
     setLocalCases(updated)
     setIsAdding(false)
     setAddForm({ number: "", title: "", precondition: "", steps: "", expected: "" })
@@ -380,7 +399,7 @@ export function TestExecutionDialog({
       }
     })
 
-    const updated = [...localCases, ...appended]
+    const updated = sortTestCasesByCaseNo([...localCases, ...appended])
     setLocalCases(updated)
     setBulkPasteText("")
     setIsBulkPasting(false)
@@ -404,9 +423,11 @@ export function TestExecutionDialog({
     return { numerator: importantChecked, denominator: importantCount }
   }, [localCases, showImportantOnly])
 
+  const sortedLocalCases = useMemo(() => sortTestCasesByCaseNo(localCases), [localCases])
+
   const displayedCases = useMemo(
-    () => (showImportantOnly ? localCases.filter((tc) => tc.isImportant) : localCases),
-    [localCases, showImportantOnly]
+    () => (showImportantOnly ? sortedLocalCases.filter((tc) => tc.isImportant) : sortedLocalCases),
+    [sortedLocalCases, showImportantOnly]
   )
 
   const displayedCaseIds = useMemo(
@@ -423,16 +444,6 @@ export function TestExecutionDialog({
   }
 
   useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!open || !hasUnsavedChanges) return
-      e.preventDefault()
-      e.returnValue = "您有未保存的更改，确定要离开吗？"
-    }
-    window.addEventListener("beforeunload", onBeforeUnload)
-    return () => window.removeEventListener("beforeunload", onBeforeUnload)
-  }, [open, hasUnsavedChanges])
-
-  useEffect(() => {
     if (!open) {
       commitSessionRef.current += 1
     }
@@ -445,52 +456,29 @@ export function TestExecutionDialog({
     initialSnapshotRef.current = initialSnapshot
   }, [localCases, initialSnapshot])
 
-  /** 遮罩 / X /「关闭」：仅丢弃本地修改，绝不自动写库（保存仅允许走「保存并关闭」） */
-  const performDismiss = useCallback(() => {
-    if (isSavingOnCloseRef.current) {
-      toast.info("正在保存到服务器，请稍候再关闭")
-      return
-    }
-
-    const casesCopy = localCasesRef.current.map((tc) => ({ ...tc }))
-    const dirty = snapshotCases(casesCopy) !== initialSnapshotRef.current
-
-    if (dirty) {
-      const ok = window.confirm(
-        "有未保存的更改。确定要关闭吗？关闭后将丢弃本次修改，不会保存到数据库。"
-      )
-      if (!ok) return
-    }
-
+  const performDiscardAndClose = useCallback(() => {
+    commitSessionRef.current += 1
     onOpenChange(false)
   }, [onOpenChange])
 
-  const handleSheetOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) {
-        onOpenChange(true)
-        return
-      }
-      performDismiss()
-    },
-    [onOpenChange, performDismiss]
-  )
-
-  /** 明确「保存并关闭」：仅此路径调用 onCommitTestCases */
-  const handleSaveAndClose = useCallback(async () => {
+  const performSaveAndClose = useCallback(async () => {
     if (!requirementId) {
       toast.error("无法保存", { description: "缺少需求 ID" })
       onOpenChange(false)
       return
     }
-    if (!hasUnsavedChanges) {
+    if (saveInFlightRef.current) return
+
+    if (!isDirtyRef.current) {
       onOpenChange(false)
       return
     }
+
+    const casesCopy = sortTestCasesByCaseNo(localCasesRef.current.map((tc) => ({ ...tc })))
     const sessionAtStart = commitSessionRef.current
     setIsSavingOnClose(true)
     try {
-      const normalized = dedupeCaseNumbersForPersist(localCases)
+      const normalized = dedupeCaseNumbersForPersist(sortTestCasesByCaseNo(casesCopy))
       setLocalCases(normalized)
       await onCommitTestCases(requirementId, normalized)
       if (commitSessionRef.current !== sessionAtStart) {
@@ -506,7 +494,42 @@ export function TestExecutionDialog({
     } finally {
       setIsSavingOnClose(false)
     }
-  }, [requirementId, hasUnsavedChanges, localCases, onCommitTestCases, onOpenChange])
+  }, [requirementId, onCommitTestCases, onOpenChange])
+
+  const handleCancel = useCallback(() => {
+    if (saveInFlightRef.current) return
+    isCancelingRef.current = true
+    onOpenChange(false)
+  }, [onOpenChange])
+
+  const handleSheetOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        isCancelingRef.current = false
+        onOpenChange(true)
+        return
+      }
+      if (isCancelingRef.current) {
+        isCancelingRef.current = false
+        performDiscardAndClose()
+        return
+      }
+      if (saveInFlightRef.current) {
+        toast.info("正在保存，请稍候…")
+        return
+      }
+      if (!isDirtyRef.current) {
+        onOpenChange(false)
+        return
+      }
+      void performSaveAndClose()
+    },
+    [onOpenChange, performDiscardAndClose, performSaveAndClose]
+  )
+
+  const handleSaveAndClose = useCallback(() => {
+    void performSaveAndClose()
+  }, [performSaveAndClose])
 
   return (
     <Sheet open={open} onOpenChange={handleSheetOpenChange}>
@@ -514,7 +537,7 @@ export function TestExecutionDialog({
         side="right"
         className={cn(
           "w-[95vw] sm:max-w-4xl overflow-hidden flex flex-col p-0",
-          isSavingOnClose && "opacity-90"
+          isSavingOnClose && isDirty && "opacity-90"
         )}
       >
         {/* Header */}
@@ -598,7 +621,7 @@ export function TestExecutionDialog({
                   </div>
                 </div>
               )}
-              {isSavingOnClose && (
+              {isSavingOnClose && isDirty && (
                 <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   保存中...
@@ -999,16 +1022,16 @@ export function TestExecutionDialog({
             size="sm"
             className="h-9"
             disabled={isSavingOnClose}
-            onClick={performDismiss}
+            onClick={handleCancel}
           >
-            关闭
+            取消
           </Button>
           <Button
             type="button"
             size="sm"
             className="h-9 gap-1.5 bg-slate-900 hover:bg-slate-800 text-white"
-            disabled={isSavingOnClose || !hasUnsavedChanges}
-            onClick={() => void handleSaveAndClose()}
+            disabled={isSavingOnClose}
+            onClick={handleSaveAndClose}
           >
             {isSavingOnClose ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
             保存并关闭

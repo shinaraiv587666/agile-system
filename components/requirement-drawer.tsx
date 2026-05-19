@@ -638,6 +638,7 @@ export function RequirementDrawer({
   const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string } | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const saveInFlightRef = useRef(false)
+  const isCancelingRef = useRef(false)
   const [baselineFingerprint, setBaselineFingerprint] = useState("")
 
   const resetFormState = () => {
@@ -727,6 +728,16 @@ export function RequirementDrawer({
       ),
     [editTitle, editVersion, editCategory, editDescriptionBlocks, editTableData, editImageUrls]
   )
+
+  const isDirty = useMemo(
+    () => dirtyFingerprint !== baselineFingerprint,
+    [dirtyFingerprint, baselineFingerprint]
+  )
+
+  const isDirtyRef = useRef(isDirty)
+  useEffect(() => {
+    isDirtyRef.current = isDirty
+  }, [isDirty])
 
   const prevOpenRef = useRef(open)
   useEffect(() => {
@@ -997,13 +1008,13 @@ export function RequirementDrawer({
     }
     if (saveInFlightRef.current) return
 
-    if (!editTitle.trim()) {
-      toast.error("请填写需求标题后再保存")
+    if (!isDirtyRef.current) {
+      onOpenChange(false)
       return
     }
 
-    if (dirtyFingerprint === baselineFingerprint) {
-      onOpenChange(false)
+    if (!editTitle.trim()) {
+      toast.error("请填写需求标题后再保存")
       return
     }
 
@@ -1034,8 +1045,6 @@ export function RequirementDrawer({
   }, [
     onSave,
     onOpenChange,
-    dirtyFingerprint,
-    baselineFingerprint,
     editTitle,
     editVersion,
     editCategory,
@@ -1044,14 +1053,30 @@ export function RequirementDrawer({
     editImageUrls,
   ])
 
+  const handleCancel = useCallback(() => {
+    if (saveInFlightRef.current) return
+    isCancelingRef.current = true
+    onOpenChange(false)
+  }, [onOpenChange])
+
   const handleRequirementSheetOpenChange = useCallback(
     (next: boolean) => {
       if (next) {
+        isCancelingRef.current = false
         onOpenChange(true)
+        return
+      }
+      if (isCancelingRef.current) {
+        isCancelingRef.current = false
+        onOpenChange(false)
         return
       }
       if (saveInFlightRef.current) {
         toast.info("正在保存，请稍候…")
+        return
+      }
+      if (!isDirtyRef.current) {
+        onOpenChange(false)
         return
       }
       void performSaveAndClose()
@@ -1791,10 +1816,7 @@ export function RequirementDrawer({
                 size="sm"
                 type="button"
                 disabled={isSaving}
-                onClick={() => {
-                  if (saveInFlightRef.current) return
-                  onOpenChange(false)
-                }}
+                onClick={handleCancel}
                 className="text-xs"
               >
                 取消
