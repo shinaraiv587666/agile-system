@@ -320,9 +320,14 @@ function normalizeTags(tags: string[]): string[] {
   return next.length > 0 ? next : ["all"]
 }
 
+/** 两位数字 + 可选版本字母（字母后须为 _、-、空格、中文或结尾；纯数字不要求此后缀） */
 function inferColumnTagsFromHeader(header: string): string[] {
-  const m = header.match(/(?:^|[^\d])(\d{2})(?!\d)/)
-  return m?.[1] ? [m[1]] : ["all"]
+  const regex = /(\d{2}(?:[A-Za-z](?=[_\-\s\u4e00-\u9fa5]|$))?)/
+  const match = header.match(regex)
+  if (match) {
+    return [match[1].toUpperCase()]
+  }
+  return ["all"]
 }
 
 /**
@@ -1100,10 +1105,10 @@ export function RequirementDrawer({
     <Sheet open={open} onOpenChange={handleRequirementSheetOpenChange}>
       <SheetContent 
         side="right" 
-        className="w-[95vw] sm:max-w-4xl overflow-y-auto p-0 border-l border-slate-200"
+        className="w-[95vw] sm:max-w-4xl flex flex-col h-full overflow-hidden p-0 border-l border-slate-200 gap-0"
       >
         {/* Header */}
-        <SheetHeader className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-100 p-5 pb-4">
+        <SheetHeader className="shrink-0 z-10 bg-white border-b border-slate-100 p-5 pb-4">
           <div className="flex items-start justify-between gap-4 pr-8">
             <div className="flex-1 min-w-0">
               <SheetTitle className="sr-only">{accessibilityTitle}</SheetTitle>
@@ -1165,8 +1170,8 @@ export function RequirementDrawer({
           </div>
         </SheetHeader>
 
-        {/* Content Area */}
-        <div className="p-5 space-y-6">
+        {/* Content Area — 仅此区域纵向滚动 */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-6">
           {/* Description：浏览态无有效内容时整块不渲染 */}
           {(isEditing || showBrowseDescription) && (
           <section>
@@ -1554,9 +1559,9 @@ export function RequirementDrawer({
               </div>
             )}
 
-            <div className="rounded-lg border border-slate-200 overflow-hidden flex flex-col min-h-0">
-              <div className="max-h-[min(60vh,600px)] overflow-auto min-h-0">
-                <table className="w-full text-xs border-collapse">
+            <div className="rounded-lg border border-slate-200 flex flex-col min-h-0">
+              <div className="relative max-w-full overflow-x-auto overflow-y-hidden pb-4">
+                <table className="w-full min-w-max text-xs border-collapse">
                   <thead className="border-b border-slate-200">
                     <tr>
                       {matrixColumns.map((col, colIndex) => {
@@ -1569,10 +1574,10 @@ export function RequirementDrawer({
                           key={col.id}
                           className={cn(
                             "px-3 py-2 text-left font-medium text-slate-600 whitespace-normal break-words align-top",
-                            "sticky top-0 bg-slate-50 shadow-sm",
+                            "sticky top-0 shadow-sm",
                             isFirstCol
-                              ? "left-0 z-30 border-r border-slate-200 shadow-[2px_2px_4px_-2px_rgba(0,0,0,0.06)]"
-                              : "z-20",
+                              ? "left-0 z-30 border-r border-slate-200 shadow-[2px_2px_4px_-2px_rgba(0,0,0,0.06)] bg-slate-50"
+                              : "sticky top-0 z-20 bg-slate-50",
                             minWidthClass
                           )}
                         >
@@ -1670,7 +1675,7 @@ export function RequirementDrawer({
                         </th>
                       )})}
                       {isEditing && (
-                        <th className="sticky top-0 right-0 z-[25] w-10 px-2 py-2 bg-slate-50 shadow-sm border-l border-slate-200" />
+                        <th className="sticky top-0 right-0 z-20 w-10 px-2 py-2 bg-slate-50 shadow-sm border-l border-slate-200" />
                       )}
                     </tr>
                   </thead>
@@ -1730,7 +1735,7 @@ export function RequirementDrawer({
                           </td>
                         )})}
                         {isEditing && (
-                          <td className="sticky right-0 z-[15] px-1 py-1 bg-white border-l border-slate-100 group-hover/row:bg-slate-50/50">
+                          <td className="sticky right-0 z-10 px-1 py-1 bg-white border-l border-slate-100 group-hover/row:bg-slate-50/50">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -1763,8 +1768,8 @@ export function RequirementDrawer({
           </section>
         </div>
 
-        {/* Footer */}
-        <div className="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-slate-100 p-4">
+        {/* Footer — 固定底部，层级高于表格 sticky */}
+        <div className="shrink-0 bg-white border-t border-slate-100 p-4 z-50 relative">
           {isEditing ? (
             <div className="flex items-center justify-between gap-3">
               {/* Delete button - only show for existing requirements */}
