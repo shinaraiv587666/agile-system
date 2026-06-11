@@ -8,6 +8,7 @@ import {
   useRef,
   useCallback,
   type ClipboardEvent as ReactClipboardEvent,
+  type RefObject,
 } from "react"
 import {
   Sheet,
@@ -592,6 +593,103 @@ function TableMatrixCellEditor({
   )
 }
 
+/** 吸底横向滚动条：与表格 overflow-x 容器双向同步，始终贴在抽屉内容区底部 */
+function DockedHorizontalScrollbar({
+  targetRef,
+  active,
+}: {
+  targetRef: RefObject<HTMLDivElement | null>
+  active: boolean
+}) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const syncingRef = useRef(false)
+  const [metrics, setMetrics] = useState({ scrollWidth: 0, clientWidth: 0, scrollLeft: 0 })
+
+  const refreshMetrics = useCallback(() => {
+    const el = targetRef.current
+    if (!el) return
+    setMetrics({
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      scrollLeft: el.scrollLeft,
+    })
+  }, [targetRef])
+
+  useLayoutEffect(() => {
+    if (!active) return
+    const el = targetRef.current
+    if (!el) return
+
+    refreshMetrics()
+    const ro = new ResizeObserver(refreshMetrics)
+    ro.observe(el)
+    if (el.firstElementChild) ro.observe(el.firstElementChild)
+
+    const onTargetScroll = () => {
+      if (syncingRef.current) return
+      const track = trackRef.current
+      if (!track) return
+      syncingRef.current = true
+      track.scrollLeft = el.scrollLeft
+      setMetrics((prev) => ({ ...prev, scrollLeft: el.scrollLeft }))
+      requestAnimationFrame(() => {
+        syncingRef.current = false
+      })
+    }
+
+    el.addEventListener("scroll", onTargetScroll, { passive: true })
+    return () => {
+      ro.disconnect()
+      el.removeEventListener("scroll", onTargetScroll)
+    }
+  }, [active, targetRef, refreshMetrics])
+
+  useLayoutEffect(() => {
+    if (!active) return
+    refreshMetrics()
+  }, [active, refreshMetrics])
+
+  const showBar = active && metrics.scrollWidth > metrics.clientWidth + 1
+
+  useLayoutEffect(() => {
+    if (!showBar) return
+    const track = trackRef.current
+    const target = targetRef.current
+    if (!track || !target) return
+    track.scrollLeft = target.scrollLeft
+  }, [showBar, metrics.scrollWidth, metrics.clientWidth, targetRef])
+
+  if (!showBar) return null
+
+  return (
+    <div className="shrink-0 z-40 border-t border-slate-200 bg-white/95 px-6 shadow-[0_-4px_12px_-4px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+      <div
+        ref={trackRef}
+        className="h-3 overflow-x-auto overflow-y-hidden py-0.5"
+        aria-label="表格横向滚动"
+        role="scrollbar"
+        aria-orientation="horizontal"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(0, metrics.scrollWidth - metrics.clientWidth)}
+        aria-valuenow={metrics.scrollLeft}
+        onScroll={() => {
+          const track = trackRef.current
+          const target = targetRef.current
+          if (!track || !target || syncingRef.current) return
+          syncingRef.current = true
+          target.scrollLeft = track.scrollLeft
+          setMetrics((prev) => ({ ...prev, scrollLeft: track.scrollLeft }))
+          requestAnimationFrame(() => {
+            syncingRef.current = false
+          })
+        }}
+      >
+        <div className="h-px" style={{ width: metrics.scrollWidth }} />
+      </div>
+    </div>
+  )
+}
+
 function buildNewDraft(defaults: NewRequirementDefaults, draftId: string): RequirementDetail {
   return {
     id: draftId,
@@ -632,6 +730,7 @@ export function RequirementDrawer({
   const [editImageUrls, setEditImageUrls] = useState<string[]>([])
   const [isUploadingGalleryImage, setIsUploadingGalleryImage] = useState(false)
   const galleryFileInputRef = useRef<HTMLInputElement>(null)
+  const tableHScrollRef = useRef<HTMLDivElement>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [newColumnTitle, setNewColumnTitle] = useState("")
   const [newColumnTags, setNewColumnTags] = useState("all")
@@ -1170,8 +1269,9 @@ export function RequirementDrawer({
           </div>
         </SheetHeader>
 
-        {/* Content Area — 自然纵向滚动；表格区 max-h 独立十字滚动 */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-6">
+        {/* 文档流：纵向靠抽屉滚动；横向由吸底滚动条控制 */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex-1 overflow-x-hidden overflow-y-auto px-6 py-5 space-y-6">
           {/* Description：浏览态无有效内容时整块不渲染 */}
           {(isEditing || showBrowseDescription) && (
           <section>
@@ -1443,7 +1543,7 @@ export function RequirementDrawer({
             </section>
           )}
 
-          {/* Data Table Section - Conditional Rendering */}
+          {/* 关联数据：流式高度，表格全量展开，仅横向滚动 */}
           <section>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
@@ -1560,7 +1660,10 @@ export function RequirementDrawer({
             )}
 
             <div className="rounded-lg border border-slate-200">
-              <div className="relative max-h-[65vh] w-full overflow-auto">
+              <div
+                ref={tableHScrollRef}
+                className="relative overflow-x-auto overflow-y-clip [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+              >
                 <table className="w-full min-w-max text-xs border-collapse">
                   <thead className="border-b border-slate-200">
                     <tr>
@@ -1766,6 +1869,11 @@ export function RequirementDrawer({
               )}
             </div>
           </section>
+          </div>
+          <DockedHorizontalScrollbar
+            targetRef={tableHScrollRef}
+            active={open && matrixColumns.length > 0}
+          />
         </div>
 
         {/* Footer — 固定底部，层级高于表格 sticky */}
