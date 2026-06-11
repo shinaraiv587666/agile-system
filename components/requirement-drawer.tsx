@@ -1170,8 +1170,9 @@ export function RequirementDrawer({
           </div>
         </SheetHeader>
 
-        {/* Content Area — 仅此区域纵向滚动 */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5 space-y-6">
+        {/* Content Area — 上：描述等自然排布；下：表格 flex-1 填满剩余空间 */}
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 py-5 gap-6">
+          <div className="shrink-0 space-y-6">
           {/* Description：浏览态无有效内容时整块不渲染 */}
           {(isEditing || showBrowseDescription) && (
           <section>
@@ -1443,9 +1444,11 @@ export function RequirementDrawer({
             </section>
           )}
 
+          </div>
+
           {/* Data Table Section - Conditional Rendering */}
-          <section>
-            <div className="flex items-center justify-between mb-2">
+          <section className="flex flex-col flex-1 min-h-0">
+            <div className="flex items-center justify-between mb-2 shrink-0">
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
                 <span className="w-0.5 h-3 bg-emerald-500 rounded-full" />
                 关联数据
@@ -1466,7 +1469,7 @@ export function RequirementDrawer({
             </div>
 
             {isEditing && (
-              <div className="mb-3 p-3 border border-slate-200 rounded-lg bg-slate-50/60">
+              <div className="mb-3 p-3 border border-slate-200 rounded-lg bg-slate-50/60 shrink-0">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <Input
                     value={newColumnTitle}
@@ -1559,8 +1562,8 @@ export function RequirementDrawer({
               </div>
             )}
 
-            <div className="rounded-lg border border-slate-200 flex flex-col min-h-0">
-              <div className="relative max-w-full overflow-x-auto overflow-y-hidden pb-4">
+            <div className="rounded-lg border border-slate-200 flex flex-col flex-1 min-h-0">
+              <div className="relative max-w-full flex-1 min-h-0 overflow-auto">
                 <table className="w-full min-w-max text-xs border-collapse">
                   <thead className="border-b border-slate-200">
                     <tr>
@@ -1752,7 +1755,7 @@ export function RequirementDrawer({
                 </table>
               </div>
               {isEditing && (
-                <div className="p-2 border-t border-slate-100">
+                <div className="p-2 border-t border-slate-100 shrink-0">
                   <Button
                     variant="ghost"
                     size="sm"

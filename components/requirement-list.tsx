@@ -332,6 +332,7 @@ export function RequirementList({
         requirementId={testingRequirement?.id ?? ""}
         requirementTitle={testingRequirement?.title ?? ""}
         testCases={testingRequirement?.testCases ?? []}
+        tableData={testingRequirement?.tableData}
         onCommitTestCases={handleCommitTestCases}
         onAllComplete={handleAllComplete}
       />

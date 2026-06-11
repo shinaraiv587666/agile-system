@@ -10,11 +10,20 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Accordion,
   AccordionContent,
@@ -38,6 +47,13 @@ import {
 import { toast } from "sonner"
 import { stringifyErrorForLog, supabaseErrorMessage } from "@/lib/stringify-error"
 import { computeTestCasesCompletion, useTestCasesImportantFilter } from "@/components/test-cases-important-filter-context"
+import type { MatrixTableData } from "@/components/requirement-drawer"
+import {
+  TableVariableMentionInput,
+  TableVariableMentionTextarea,
+} from "@/components/table-variable-mention"
+import { TableVariableText } from "@/components/table-variable-text"
+import { normalizeTestCaseTextFields } from "@/lib/table-variable-binding"
 
 // 5-field test case structure
 export interface TestCase {
@@ -60,6 +76,8 @@ interface TestExecutionDialogProps {
   requirementId: string
   requirementTitle: string
   testCases: TestCase[]
+  /** 当前需求的关联数据表格，供 @ 变量引用与浏览模式解析 */
+  tableData?: MatrixTableData
   onCommitTestCases: (requirementId: string, testCases: TestCase[]) => Promise<void> | void
   onAllComplete: (allComplete: boolean) => void
 }
@@ -198,6 +216,7 @@ export function TestExecutionDialog({
   requirementId,
   requirementTitle,
   testCases,
+  tableData,
   onCommitTestCases,
   onAllComplete,
 }: TestExecutionDialogProps) {
@@ -215,6 +234,7 @@ export function TestExecutionDialog({
   const [bulkPasteText, setBulkPasteText] = useState("")
   const [expandedItems, setExpandedItems] = useState<string[]>([])
   const [isSavingOnClose, setIsSavingOnClose] = useState(false)
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   /** 丢弃关闭时递增，使 await 返回后的保存流程不再关窗/改快照 */
   const commitSessionRef = useRef(0)
   const saveInFlightRef = useRef(false)
@@ -310,6 +330,11 @@ export function TestExecutionDialog({
     )
   }
 
+  const handleResetCheckedStatus = () => {
+    setLocalCases((prev) => prev.map((tc) => ({ ...tc, checked: false })))
+    setResetConfirmOpen(false)
+  }
+
   const handleEdit = (tc: TestCase, e: React.MouseEvent) => {
     e.stopPropagation()
     setEditingId(tc.id)
@@ -329,8 +354,9 @@ export function TestExecutionDialog({
 
   const handleSaveEdit = () => {
     if (!editingId) return
+    const normalized = normalizeTestCaseTextFields(editForm, tableData)
     const updated = localCases.map(tc =>
-      tc.id === editingId ? { ...tc, ...editForm } : tc
+      tc.id === editingId ? { ...tc, ...normalized } : tc
     )
     setLocalCases(sortTestCasesByCaseNo(updated))
     setEditingId(null)
@@ -344,14 +370,15 @@ export function TestExecutionDialog({
 
   const handleAddNew = () => {
     if (!addForm.title.trim()) return
-    const trimmedNo = addForm.number.trim()
+    const normalized = normalizeTestCaseTextFields(addForm, tableData)
+    const trimmedNo = normalized.number.trim()
     const newCase: TestCase = {
       id: uniqueClientId(`tc-${requirementId}-new`),
       number: trimmedNo || allocateNextCaseNo(localCases),
-      title: addForm.title,
-      precondition: addForm.precondition,
-      steps: addForm.steps,
-      expected: addForm.expected,
+      title: normalized.title,
+      precondition: normalized.precondition,
+      steps: normalized.steps,
+      expected: normalized.expected,
       checked: false,
       isImportant: false,
     }
@@ -367,40 +394,34 @@ export function TestExecutionDialog({
       .filter((cols) => cols.some((cell) => cell.trim().length > 0))
     if (rows.length === 0) return
 
-    const used = usedCaseNoSet(localCases)
-    const appended: TestCase[] = rows.map((cols, idx) => {
-      let number = (cols[0] ?? "").trim()
-      if (!number) {
-        let k = 1
-        while (used.has(padTcSequential(k))) k++
-        number = padTcSequential(k)
-        used.add(number)
-      } else {
-        if (used.has(number)) {
-          let s = 1
-          let candidate = `${number}-${s}`
-          while (used.has(candidate)) {
-            s++
-            candidate = `${number}-${s}`
-          }
-          number = candidate
+    setLocalCases((prev) => {
+      const existingCount = prev.length
+      const newCases: TestCase[] = rows.map((cols, index) => {
+        const rawNumber = (cols[0] ?? "").trim()
+        const number =
+          rawNumber ||
+          `TC-${String(existingCount + index + 1).padStart(2, "0")}`
+
+        return {
+          id: uniqueClientId(`tc-${requirementId}-bulk-${index}`),
+          ...normalizeTestCaseTextFields(
+            {
+              number,
+              title: cols[1] ?? "",
+              precondition: cols[2] ?? "",
+              steps: cols[3] ?? "",
+              expected: cols[4] ?? "",
+            },
+            tableData
+          ),
+          checked: false,
+          isImportant: false,
         }
-        used.add(number)
-      }
-      return {
-        id: uniqueClientId(`tc-${requirementId}-bulk-${idx}`),
-        number,
-        title: cols[1] ?? "",
-        precondition: cols[2] ?? "",
-        steps: cols[3] ?? "",
-        expected: cols[4] ?? "",
-        checked: false,
-        isImportant: false,
-      }
+      })
+
+      return [...prev, ...newCases]
     })
 
-    const updated = sortTestCasesByCaseNo([...localCases, ...appended])
-    setLocalCases(updated)
     setBulkPasteText("")
     setIsBulkPasting(false)
   }
@@ -423,11 +444,9 @@ export function TestExecutionDialog({
     return { numerator: importantChecked, denominator: importantCount }
   }, [localCases, showImportantOnly])
 
-  const sortedLocalCases = useMemo(() => sortTestCasesByCaseNo(localCases), [localCases])
-
   const displayedCases = useMemo(
-    () => (showImportantOnly ? sortedLocalCases.filter((tc) => tc.isImportant) : sortedLocalCases),
-    [sortedLocalCases, showImportantOnly]
+    () => (showImportantOnly ? localCases.filter((tc) => tc.isImportant) : localCases),
+    [localCases, showImportantOnly]
   )
 
   const displayedCaseIds = useMemo(
@@ -594,6 +613,15 @@ export function TestExecutionDialog({
                     <ClipboardPaste className="w-4 h-4" />
                     批量粘贴
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setResetConfirmOpen(true)}
+                    disabled={isSavingOnClose || localCases.length === 0}
+                    className="gap-1.5 text-sm h-9 border-slate-200 text-slate-600 hover:text-slate-900"
+                  >
+                    🔄 重置状态
+                  </Button>
                   <div
                     className={cn(
                       "flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors",
@@ -639,7 +667,12 @@ export function TestExecutionDialog({
           {isBulkPasting && (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
               <p className="text-xs text-slate-600">
-                请确保从 Excel 复制的数据包含 5 列，顺序依次为：编号 | 标题 | 前置条件 | 步骤 | 预期结果
+                请确保从 Excel 复制的数据包含 5 列，顺序依次为：编号 | 标题 | 前置条件 | 步骤 | 预期结果。
+                文本字段中可使用{" "}
+                <code className="px-1 py-0.5 rounded bg-slate-100 font-mono text-[10px]">
+                  {"{{行首列名::列表头名}}"}
+                </code>{" "}
+                引用表格单元格，导入时自动转为 ID 绑定。
               </p>
               <Textarea
                 value={bulkPasteText}
@@ -690,48 +723,59 @@ export function TestExecutionDialog({
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="text-xs font-medium text-slate-500 mb-1.5 block">编号</label>
-                  <Input
+                  <TableVariableMentionInput
                     value={addForm.number}
-                    onChange={(e) => setAddForm({ ...addForm, number: e.target.value })}
+                    onChange={(number) => setAddForm({ ...addForm, number })}
+                    tableData={tableData}
                     placeholder="TC-001"
-                    className="h-9 text-sm bg-white/80 border-violet-200 focus:border-violet-400"
+                    variant="title"
+                    className="h-9 text-sm font-mono bg-white/80 border-violet-200 focus-visible:border-violet-400"
                   />
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-slate-500 mb-1.5 block">标题 *</label>
-                  <Input
+                  <TableVariableMentionInput
                     value={addForm.title}
-                    onChange={(e) => setAddForm({ ...addForm, title: e.target.value })}
+                    onChange={(title) => setAddForm({ ...addForm, title })}
+                    tableData={tableData}
                     placeholder="测试用例标题..."
-                    className="h-9 text-sm bg-white/80 border-violet-200 focus:border-violet-400"
+                    variant="title"
+                    className="border-violet-200 focus-visible:border-violet-400"
                   />
                 </div>
                 <div className="col-span-3">
                   <label className="text-xs font-medium text-slate-500 mb-1.5 block">前置条件</label>
-                  <textarea
+                  <TableVariableMentionTextarea
                     value={addForm.precondition}
-                    onChange={(e) => setAddForm({ ...addForm, precondition: e.target.value })}
+                    onChange={(precondition) => setAddForm({ ...addForm, precondition })}
+                    tableData={tableData}
                     placeholder="执行该测试用例所需的前置条件..."
-                    className="w-full h-16 p-3 text-sm border border-violet-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 bg-white/80 transition-all duration-200"
+                    rows={3}
+                    className="border-violet-200"
+                    showMentionHint
                   />
                 </div>
                 <div className="col-span-3 grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-medium text-slate-500 mb-1.5 block">测试步骤</label>
-                    <textarea
+                    <TableVariableMentionTextarea
                       value={addForm.steps}
-                      onChange={(e) => setAddForm({ ...addForm, steps: e.target.value })}
-                      placeholder="1. 步骤一&#10;2. 步骤二..."
-                      className="w-full h-24 p-3 text-sm border border-violet-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 bg-white/80 transition-all duration-200"
+                      onChange={(steps) => setAddForm({ ...addForm, steps })}
+                      tableData={tableData}
+                      placeholder={"1. 步骤一\n2. 步骤二..."}
+                      rows={5}
+                      className="border-violet-200"
                     />
                   </div>
                   <div>
                     <label className="text-xs font-medium text-slate-500 mb-1.5 block">预期结果</label>
-                    <textarea
+                    <TableVariableMentionTextarea
                       value={addForm.expected}
-                      onChange={(e) => setAddForm({ ...addForm, expected: e.target.value })}
-                      placeholder="1. 预期结果一&#10;2. 预期结果二..."
-                      className="w-full h-24 p-3 text-sm border border-violet-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 bg-white/80 transition-all duration-200"
+                      onChange={(expected) => setAddForm({ ...addForm, expected })}
+                      tableData={tableData}
+                      placeholder={"1. 预期结果一\n2. 预期结果二..."}
+                      rows={5}
+                      className="border-violet-200"
                     />
                   </div>
                 </div>
@@ -810,15 +854,19 @@ export function TestExecutionDialog({
                   
                   {/* Main trigger area */}
                   <div className="flex-1 flex items-center gap-2 min-w-0">
-                    <Badge 
-                      variant="outline" 
+                    <span
                       className={cn(
-                        "shrink-0 text-xs px-2 py-0.5 font-mono font-medium transition-colors",
-                        tc.checked ? "bg-emerald-50 border-emerald-200 text-emerald-600" : "bg-slate-50"
+                        "shrink-0 max-w-[140px] truncate text-xs font-mono font-medium px-2 py-0.5 rounded",
+                        tc.checked ? "text-slate-400 bg-slate-50/80" : "text-slate-700 bg-slate-50"
                       )}
                     >
-                      {tc.number}
-                    </Badge>
+                      <TableVariableText
+                        text={tc.number}
+                        tableData={tableData}
+                        className="text-xs font-mono truncate"
+                        emptyLabel="—"
+                      />
+                    </span>
                     <Button
                       type="button"
                       variant="ghost"
@@ -846,10 +894,15 @@ export function TestExecutionDialog({
                       className="flex min-w-0 flex-1 items-center text-left"
                     >
                       <span className={cn(
-                        "text-sm font-medium truncate transition-colors",
+                        "text-sm font-medium truncate transition-colors min-w-0",
                         tc.checked ? "text-slate-400 line-through" : "text-slate-700"
                       )}>
-                        {tc.title}
+                        <TableVariableText
+                          text={tc.title}
+                          tableData={tableData}
+                          className="text-sm font-medium"
+                          emptyLabel="无标题"
+                        />
                       </span>
                     </button>
                   </div>
@@ -892,44 +945,55 @@ export function TestExecutionDialog({
                       <div className="grid grid-cols-3 gap-4">
                         <div>
                           <label className="text-xs font-medium text-slate-500 mb-1.5 block">编号</label>
-                          <Input
+                          <TableVariableMentionInput
                             value={editForm.number}
-                            onChange={(e) => setEditForm({ ...editForm, number: e.target.value })}
-                            className="h-9 text-sm"
+                            onChange={(number) => setEditForm({ ...editForm, number })}
+                            tableData={tableData}
+                            variant="title"
+                            className="h-9 text-sm font-mono bg-white"
                           />
                         </div>
                         <div className="col-span-2">
                           <label className="text-xs font-medium text-slate-500 mb-1.5 block">标题</label>
-                          <Input
+                          <TableVariableMentionInput
                             value={editForm.title}
-                            onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                            className="h-9 text-sm"
+                            onChange={(title) => setEditForm({ ...editForm, title })}
+                            tableData={tableData}
+                            variant="title"
+                            className="bg-white"
                           />
                         </div>
                       </div>
                       <div>
                         <label className="text-xs font-medium text-slate-500 mb-1.5 block">前置条件</label>
-                        <textarea
+                        <TableVariableMentionTextarea
                           value={editForm.precondition}
-                          onChange={(e) => setEditForm({ ...editForm, precondition: e.target.value })}
-                          className="w-full h-16 p-3 text-sm border border-slate-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all duration-200"
+                          onChange={(precondition) => setEditForm({ ...editForm, precondition })}
+                          tableData={tableData}
+                          rows={3}
+                          className="border-slate-200 bg-white"
+                          showMentionHint
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="text-xs font-medium text-slate-500 mb-1.5 block">测试步骤</label>
-                          <textarea
+                          <TableVariableMentionTextarea
                             value={editForm.steps}
-                            onChange={(e) => setEditForm({ ...editForm, steps: e.target.value })}
-                            className="w-full h-24 p-3 text-sm border border-slate-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all duration-200"
+                            onChange={(steps) => setEditForm({ ...editForm, steps })}
+                            tableData={tableData}
+                            rows={5}
+                            className="border-slate-200"
                           />
                         </div>
                         <div>
                           <label className="text-xs font-medium text-slate-500 mb-1.5 block">预期结果</label>
-                          <textarea
+                          <TableVariableMentionTextarea
                             value={editForm.expected}
-                            onChange={(e) => setEditForm({ ...editForm, expected: e.target.value })}
-                            className="w-full h-24 p-3 text-sm border border-slate-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all duration-200"
+                            onChange={(expected) => setEditForm({ ...editForm, expected })}
+                            tableData={tableData}
+                            rows={5}
+                            className="border-slate-200"
                           />
                         </div>
                       </div>
@@ -958,20 +1022,26 @@ export function TestExecutionDialog({
                       {/* Precondition */}
                       <div>
                         <label className="text-xs font-semibold text-slate-500 mb-2 block uppercase tracking-wide">前置条件</label>
-                        <p className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">{tc.precondition || "无"}</p>
+                        <div className="text-sm text-slate-600">
+                          <TableVariableText text={tc.precondition} tableData={tableData} />
+                        </div>
                       </div>
                       
                       <div className="grid grid-cols-2 gap-6">
                         {/* Steps */}
                         <div>
                           <label className="text-xs font-semibold text-slate-500 mb-2 block uppercase tracking-wide">测试步骤</label>
-                          <p className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">{tc.steps || "无"}</p>
+                          <div className="text-sm text-slate-600">
+                            <TableVariableText text={tc.steps} tableData={tableData} />
+                          </div>
                         </div>
                         
                         {/* Expected */}
                         <div>
                           <label className="text-xs font-semibold text-slate-500 mb-2 block uppercase tracking-wide">预期结果</label>
-                          <p className="text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">{tc.expected || "无"}</p>
+                          <div className="text-sm text-slate-600">
+                            <TableVariableText text={tc.expected} tableData={tableData} />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1038,6 +1108,23 @@ export function TestExecutionDialog({
           </Button>
         </SheetFooter>
       </SheetContent>
+
+      <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>重置测试状态</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要清空当前需求下所有测试用例的勾选状态吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleResetCheckedStatus}>
+              确定重置
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sheet>
   )
 }
